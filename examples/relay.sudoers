@@ -1,0 +1,5 @@
+# Operator must verify binary paths/ownership and install with visudo -cf first.
+# No wildcards, shell, writes, iptables mutations or arbitrary nft arguments.
+Defaults:pp-ubuntu-relay env_reset, !setenv
+Defaults:pp-ubuntu-relay secure_path=/usr/sbin:/usr/bin:/sbin:/bin
+pp-ubuntu-relay ALL=(root) NOPASSWD: /usr/sbin/iptables-save -t nat, /usr/sbin/ip6tables-save -t nat, /usr/sbin/nft -j list ruleset
