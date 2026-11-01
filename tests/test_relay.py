@@ -135,9 +135,10 @@ def test_real_udp_per_client_reply_and_ttl(config, spec, monkeypatch):
         try:
             relay.reserve(spec)
             relay.activate(spec)
-            with socket.socket(type=socket.SOCK_DGRAM) as first, socket.socket(
-                type=socket.SOCK_DGRAM
-            ) as second:
+            with (
+                socket.socket(type=socket.SOCK_DGRAM) as first,
+                socket.socket(type=socket.SOCK_DGRAM) as second,
+            ):
                 clients = [first, second]
                 upstreams = []
                 for n, client in enumerate(clients):

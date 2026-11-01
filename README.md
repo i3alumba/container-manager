@@ -1,10 +1,50 @@
 # Ubuntu container manager
 
 Admin-only FastAPI control plane for persistent, unprivileged Ubuntu system
-containers on gamma. This directory is implementation, **not a deployed service**.
+containers on gamma. This repository is implementation, **not a production release**.
 There is no Minecraft/Java/game installer, VM runtime, disk quota, host-volume
 migration, guest deletion, web terminal, arbitrary exec/config/image/host-path API,
 or change to existing Auth identities.
+
+## Repository boundary and history
+
+This is the standalone service repository
+[`i3alumba/container-manager`](https://github.com/i3alumba/container-manager).
+The parent [`public-page`](https://github.com/LumbaBalumba/public-page) pins an
+exact published commit as the `container-manager/` Git submodule. Clone this
+repository directly for service development, then run the local commands below
+from its root. In the parent use `git submodule update --init --recursive`; do not
+use `--remote` to change the pinned version implicitly.
+
+Controller, node agent, relay, typed RPC/protobuf source, Dockerfile, operator
+examples and service tests live here. The UI stays in
+[`dashboard`](https://github.com/i3alumba/dashboard); parent CI, Kubernetes,
+image inventories and the [deployment runbook](https://github.com/LumbaBalumba/public-page/blob/dev/docs/UBUNTU-CONTAINERS.md)
+stay in `public-page`. Child publication does not deploy an application or update
+the parent gitlink automatically.
+
+The original three service commits were extracted without squash using
+`git subtree split --prefix=container-manager` at parent
+`13878759bc9168e7f522e7d78e59446ce4871592`. Preserved subtree head:
+`e2508fd2981af2c2d4f9c645afc1fddabe184a71`; its tree exactly matches the original
+service directory. Import is a merge on a dev-based feature branch, not a new
+copy-only source history. Service changes follow feature → checked `dev` →
+separate `master` PR; the parent updates its gitlink only after child publication.
+
+## Current release blockers
+
+Extraction does **not** approve deployment or alter runtime behavior. Real-path
+acceptance found intermittent reply truncation after TCP half-close through the
+current gamma Incus TCP proxy. Normal SSH/TCP echo and UDP nonce replies worked,
+but generic TCP release remains blocked; local tests do not waive this failure.
+Additional TCP-edit, native power/restart and full root-plus-home restore gates
+remain unaccepted. The restricted project currently denies backup creation; no
+restriction has been relaxed. Proposed TCP-target behavior and operator backup
+permission changes require explicit approval. Parent release PR
+[#185](https://github.com/LumbaBalumba/public-page/pull/185) remains Draft.
+New native application units and test forwarding were stopped/disabled; only an
+owned stopped scratch guest retains test data. Existing production workloads and
+credentials are not changed by this repository extraction.
 
 ## Architecture and trust boundaries
 

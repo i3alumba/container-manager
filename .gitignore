@@ -4,3 +4,8 @@ __pycache__/
 *.sqlite*
 *.pem
 *.key
+.env
+.env.*
+runtime/
+state/
+pki/
