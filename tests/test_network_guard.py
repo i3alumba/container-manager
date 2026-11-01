@@ -1,6 +1,7 @@
 """Operator guard is additive/idempotent and refuses misplaced or duplicate hooks."""
 
 import importlib.util
+import ipaddress
 from pathlib import Path
 import shlex
 
@@ -116,3 +117,101 @@ def test_inspection_failure_never_becomes_absence(policy):
     with pytest.raises(RuntimeError, match="inspection failed"):
         guard.ensure(policy, denied)
     assert calls == [["-S"]]
+
+
+REPLY_RETURN = [
+    "-m",
+    "conntrack",
+    "--ctstate",
+    "ESTABLISHED",
+    "--ctdir",
+    "REPLY",
+    "-j",
+    "RETURN",
+]
+
+
+def gamma_config():
+    return {
+        "role": "gamma",
+        "pod_cidr": "10.42.0.0/24",
+        "reserved_ports": [5000, 6443, 9443, 9444],
+    }
+
+
+def proxy_verdict(protocol, state, direction, incumbent):
+    """Evaluate only the actual guarded-chain predicates, never kernel proof."""
+    chains, _ = guard.policy(gamma_config())
+    for rule in chains["PPUBUNTU_PROXY"]:
+        assert set(rule[::2]) <= {
+            "-m",
+            "--ctstate",
+            "--ctdir",
+            "-p",
+            "--dports",
+            "-s",
+            "-j",
+        }
+        options = dict(zip(rule[::2], rule[1::2]))
+        if "-p" in options and options["-p"] != protocol:
+            continue
+        if "--ctstate" in options and options["--ctstate"] != state:
+            continue
+        if "--ctdir" in options and options["--ctdir"] != direction:
+            continue
+        if "--dports" in options and "8000" not in options["--dports"].split(","):
+            continue
+        if "-s" in options and ipaddress.ip_address(
+            "10.200.73.3"
+        ) not in ipaddress.ip_network(options["-s"]):
+            continue
+        assert options["-j"] in {"RETURN", "DROP"}
+        return incumbent if options["-j"] == "RETURN" else "DROP"
+    raise AssertionError("Missing terminal verdict")
+
+
+def test_exact_reply_rule_is_gamma_only():
+    config = gamma_config()
+    chains, _ = guard.policy(config)
+    assert chains["PPUBUNTU_PROXY"][0] == REPLY_RETURN
+    assert chains["PPUBUNTU_PROXY"].count(REPLY_RETURN) == 1
+    alpha, _ = guard.policy({**config, "role": "alpha"})
+    assert set(alpha) == {"PPUBUNTU_RPC"}
+    assert alpha["PPUBUNTU_RPC"] == chains["PPUBUNTU_RPC"]
+
+
+@pytest.mark.parametrize("protocol", ["tcp", "udp"])
+@pytest.mark.parametrize(
+    "state,direction",
+    [
+        ("NEW", "ORIGINAL"),
+        ("ESTABLISHED", "ORIGINAL"),
+        ("RELATED", "REPLY"),
+        ("INVALID", "REPLY"),
+        ("UNTRACKED", "REPLY"),
+    ],
+)
+def test_nonalpha_ingress_does_not_gain_reply_exception(protocol, state, direction):
+    assert proxy_verdict(protocol, state, direction, "ACCEPT") == "DROP"
+
+
+@pytest.mark.parametrize("protocol", ["tcp", "udp"])
+@pytest.mark.parametrize("incumbent", ["ACCEPT", "DROP"])
+def test_established_reply_obeys_incumbent_policy(protocol, incumbent):
+    assert proxy_verdict(protocol, "ESTABLISHED", "REPLY", incumbent) == incumbent
+
+
+@pytest.mark.parametrize("fault", ["duplicate", "misplaced"])
+def test_reply_rule_drift_never_gets_automatic_repair(fault):
+    firewall = Firewall()
+    config = gamma_config()
+    guard.ensure(config, firewall)
+    rules = firewall.rules["PPUBUNTU_PROXY"]
+    if fault == "duplicate":
+        rules.insert(0, list(REPLY_RETURN))
+    else:
+        rules.append(rules.pop(0))
+    firewall.mutations.clear()
+    with pytest.raises(RuntimeError, match="drift"):
+        guard.ensure(config, firewall)
+    assert firewall.mutations == []

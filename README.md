@@ -387,7 +387,14 @@ make a port appear free. UDP ownership and readiness remain unchanged.
   mTLS. Gamma proxy INPUT is limited to alpha's source, with all infrastructure
   and NodePorts returned to the incumbent policy. No NAT/FORWARD/Docker rule is
   changed. Whole-filter inspection errors fail before mutation; exact leading
-  hooks and owned chain contents must match on repeat. Partial state, duplicates,
+  hooks and owned chain contents must match on repeat. Gamma's proxy chain returns
+  only conntrack `ESTABLISHED` / `REPLY` traffic to incumbent INPUT policy before
+  applying the new-ingress restriction. It does not ACCEPT replies, exempt RELATED
+  traffic or permit non-alpha original-direction ingress. This prevents reply
+  packets to a host client's in-range ephemeral port from being mistaken for a
+  new published connection. Updating an already installed old chain requires a
+  separately authorized, whole-filter-verified one-rule transition; the helper
+  intentionally refuses to migrate drift automatically. Partial state, duplicates,
   misplaced hooks or drift require operator review, never automatic flush/repair.
   Serialize with other firewall writers and verify persistence/order after boot.
   The fixed topology is intentional; do not use this helper unchanged elsewhere.
