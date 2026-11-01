@@ -48,13 +48,13 @@ class Incus:
             if row["state"] == "creating":
                 store.own(row["id"], json.loads(row["spec"]), "error")
 
-    def query(self, uri):
+    def query(self, uri, timeout: float = 5):
         try:
             result = self.runner(
                 ["incus", "query", uri],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                timeout=5,
+                timeout=timeout,
                 check=True,
             )
             value = json.loads(result.stdout)

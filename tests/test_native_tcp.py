@@ -367,7 +367,11 @@ def test_native_tcp_every_connection_revalidates_and_closes_on_drift(native_node
                 assert rejected.recv(99) == b""
             assert first.recv(99) == b""
             assert peer.recv(99) == b""
-            assert node.store.native_records()[0]["state"] == "error"
+            # EOF is observable before the validation callback commits its
+            # durable phase. Join the same lifecycle lock used by that callback
+            # instead of racing its final SQLite transaction.
+            with node.instance_lock(spec["instance_id"]):
+                assert node.store.native_records()[0]["state"] == "error"
 
 
 def test_native_tcp_generation_fences_connect_completion(

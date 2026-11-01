@@ -93,8 +93,9 @@ cryptographically zeroized; disable core dumps and keep tracing/body capture off
   fingerprint**. No remote image URL, profile or user-selected image is accepted.
 - UUID-owned names `pp-ubuntu-<canonical-uuid>`; no user slug is an Incus name.
   Ordinary CLI calls use argv, fixed `--project pp-ubuntu`, no shell. Read-only
-  `incus query` calls use project scope in the URI only; shared-network and
-  all-project allocation queries intentionally have no project scope. Only a constant
+  `incus query` calls use project scope in the URI only: network metadata uses
+  `project=default`, and leases use each authoritative shared-domain project.
+  Project inventory and all-project instance queries have no project scope. Only a constant
   guest bootstrap uses `/bin/sh -c`.
 - Full persistent root, including `/etc`, packages and SSH host keys; separate
   managed custom volume `<owned-name>-home`, mounted at `/home` from the same pool.
@@ -314,6 +315,17 @@ Before the first pin the owned guest must be running and inheriting the fixed
 (`10.211.0.1/24`, IPv6 disabled), filtering fields, instance project/type/name,
 root profile and full all-project NIC claims are checked against the complete
 shared-network DHCP lease domain. Hostnames and guest state IPs are not authority.
+Each snapshot reads the complete project inventory (maximum 256, explicit
+`features.networks=true|false` required), then leases for `default` and every
+project explicitly sharing its networks (`false`, maximum 16 scopes). Query
+parameters are URL-encoded; isolated (`true`) projects' same-named networks are
+not conflated with this bridge. Unknown claim projects fail closed. Inventory
+and all scoped lease queries share one **2s monotonic deadline**, not 2s per
+scope; denial, malformed data, excess scopes or late/partial results reject the
+whole snapshot before an initial pin intent or mutation. Lease provenance is
+retained: the initial dynamic candidate must come from `pp-ubuntu`, and any
+foreign-scope matching IP or MAC conflicts, even an identical static pair.
+Stopped ready static pins may lack dynamic leases only after all scopes complete.
 The one unambiguous current dynamic lease is preferred, never a first-free scan;
 gateway/network/broadcast/foreign/duplicate allocations fail closed. A node-wide
 allocation lock and SQLite `UNIQUE(network,address)` reserve the intent before
