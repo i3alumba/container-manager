@@ -269,6 +269,21 @@ leave a mapping unavailable but reserved until operator review.
   and alpha->gamma published ports; gamma proxy ingress restricted to alpha's
   WireGuard peer; bridge ACLs isolate guest access to host/k3s/private networks.
   Existing k3s/Docker/firewall policy stays operator-owned.
+- `examples/network-guard.py` is an **operator-run**, root-owned INPUT guard, not
+  an API action. Install it only after reviewing the actual topology/reservations;
+  run `python3 /usr/local/libexec/pp-ubuntu-network-guard.py` through a dedicated
+  oneshot before the new native services. Its root-owned
+  `/etc/pp-ubuntu/network-guard.json` selects `role` (`alpha`/`gamma`), pinned gamma
+  `pod_cidr` (`10.42.0.0/24`), and sorted unique `reserved_ports` (union of
+  `models.RESERVED` and all operator reservations). It restricts only the new
+  WG-bound RPC endpoint to the gamma Pod CIDR/owned WG addresses, still requiring
+  mTLS. Gamma proxy INPUT is limited to alpha's source, with all infrastructure
+  and NodePorts returned to the incumbent policy. No NAT/FORWARD/Docker rule is
+  changed. Whole-filter inspection errors fail before mutation; exact leading
+  hooks and owned chain contents must match on repeat. Partial state, duplicates,
+  misplaced hooks or drift require operator review, never automatic flush/repair.
+  Serialize with other firewall writers and verify persistence/order after boot.
+  The fixed topology is intentional; do not use this helper unchanged elsewhere.
 - Linux `/proc/net`, iptables-save and ip6tables-save **including empty nat tables**,
   nft JSON support, sudo for non-root alpha as below. Verify all firewall dialects
   with representative snapshots before admitting guests. No inspection fallback.
