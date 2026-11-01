@@ -60,7 +60,8 @@ def native_node(config, spec):
     node.command = lambda args: setattr(
         node.allocation, "status", "running" if args[0] == "start" else "stopped"
     )
-    spec["public_port"] = available_port()
+    # Probe the actual listener address, not the distinct guest-loopback alias.
+    spec["public_port"] = available_port(address=config.gamma_ip)
     spec["target_port"] = available_port()
     yield node
     node.allocation.release.set()
@@ -273,7 +274,11 @@ def test_native_tcp_legacy_ownership_requires_reconciliation(native_node, spec, 
     with pytest.raises(Failure, match="requires_reconciliation"):
         node.remove(spec)
     if mixed:
-        native_spec = {**spec, "id": str(uuid4()), "public_port": available_port()}
+        native_spec = {
+            **spec,
+            "id": str(uuid4()),
+            "public_port": available_port(address=node.config.gamma_ip),
+        }
         node.publish(native_spec)
     calls = []
     command = node.command
