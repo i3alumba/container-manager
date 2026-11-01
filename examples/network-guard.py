@@ -271,6 +271,7 @@ def prefix_rule(rule, parsed):
     modules, options = set(), {}
     index = 0
     negated_mark = False
+    set_directions = set()
     while index < len(rule):
         option = rule[index]
         if option == "!":
@@ -287,6 +288,21 @@ def prefix_rule(rule, parsed):
         if index + 1 >= len(rule):
             refuse()
         value = rule[index + 1]
+        if option == "-m" and value == "set":
+            # A positive ipset match can only narrow packets. Deliberately do
+            # not trust its name or contents as evidence: over-approximate it
+            # as always matching, so it can never justify an unsafe ACCEPT.
+            if (
+                index + 4 >= len(rule)
+                or rule[index + 2] != "--match-set"
+                or not re.fullmatch(r"KUBE-(?:SRC|DST)-[A-Z0-9]{16}", rule[index + 3])
+                or rule[index + 4] not in {"src", "dst"}
+                or rule[index + 4] in set_directions
+            ):
+                refuse()
+            set_directions.add(rule[index + 4])
+            index += 5
+            continue
         if option == "-m":
             if (
                 value
@@ -325,6 +341,7 @@ def prefix_rule(rule, parsed):
                     "-j",
                     "--set-xmark",
                     "--nflog-group",
+                    "--nflog-prefix",
                     "--reject-with",
                 }
                 or option in options
@@ -400,16 +417,26 @@ def prefix_rule(rule, parsed):
             refuse()
         states = frozenset(values)
     target = options.get("-j")
-    effects = set(options) & {"--set-xmark", "--nflog-group", "--reject-with"}
+    effects = set(options) & {
+        "--set-xmark",
+        "--nflog-group",
+        "--nflog-prefix",
+        "--reject-with",
+    }
     allowed = {
         "MARK": {"--set-xmark"},
-        "NFLOG": {"--nflog-group"},
+        "NFLOG": {"--nflog-group", "--nflog-prefix"},
         "REJECT": {"--reject-with"},
     }.get(target, set())
     if not effects <= allowed or (target == "MARK" and "--set-xmark" not in effects):
         refuse()
     if "--nflog-group" in options:
         number(options["--nflog-group"], 65535)
+    if "--nflog-prefix" in options and (
+        not 1 <= len(options["--nflog-prefix"]) <= 64
+        or any(not 32 <= ord(c) <= 126 for c in options["--nflog-prefix"])
+    ):
+        refuse()
     if (
         "--reject-with" in options
         and options["--reject-with"] != "icmp-port-unreachable"
