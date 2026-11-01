@@ -1,0 +1,15 @@
+{
+  "mode": "relay",
+  "database": "/var/lib/pp-ubuntu-relay/state.sqlite",
+  "bind": "10.200.73.1:9444",
+  "wireguard_ip": "10.200.73.1",
+  "public_ip": "192.0.2.1",
+  "gamma_ip": "10.200.73.2",
+  "host_addresses": ["10.200.73.1", "192.0.2.1"],
+  "ca": "/etc/pp-ubuntu/ca.crt",
+  "cert": "/etc/pp-ubuntu/alpha.crt",
+  "key": "/etc/pp-ubuntu/alpha.key",
+  "controller_cn": "pp-ubuntu-controller",
+  "inspection_sudo": true,
+  "reserved_ports": [2377, 7946]
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=Privileged private gamma Incus agent (host-root trust boundary)
+After=network-online.target incus.service
+Wants=network-online.target
+
+[Service]
+User=root
+StateDirectory=pp-ubuntu-node
+Environment=INCUS_CONF=/var/lib/pp-ubuntu-node/incus-config
+WorkingDirectory=/opt/pp-ubuntu
+ExecStart=/opt/pp-ubuntu/.venv/bin/container-manager --config /etc/pp-ubuntu/node.json
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ReadOnlyPaths=/etc/pp-ubuntu
+
+[Install]
+WantedBy=multi-user.target
