@@ -12,18 +12,44 @@ from container_manager.store import Store
 from conftest import FreeInspector
 
 
-def available_port(protocol="tcp"):
+def available_port(protocol="tcp", address="127.0.0.1"):
     with socket.socket(
         type=socket.SOCK_STREAM if protocol == "tcp" else socket.SOCK_DGRAM
     ) as sock:
-        sock.bind(("127.0.0.1", 0))
+        sock.bind((address, 0))
         port = sock.getsockname()[1]
     # Test ports must not be NodePort/reserved. Ask for another ephemeral port.
     from container_manager.models import RESERVED
 
     if 30000 <= port <= 32767 or port in RESERVED:
-        return available_port(protocol)
+        return available_port(protocol, address)
     return port
+
+
+def test_available_port_probes_requested_bind_address(monkeypatch):
+    original_socket = socket.socket
+    bound = []
+
+    class TracedSocket:
+        def __init__(self, **kwargs):
+            self.sock = original_socket(**kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.sock.close()
+
+        def bind(self, address):
+            bound.append(address)
+            self.sock.bind(address)
+
+        def getsockname(self):
+            return self.sock.getsockname()
+
+    monkeypatch.setattr(socket, "socket", TracedSocket)
+    assert available_port(address="127.0.0.2") > 0
+    assert bound and all(address == ("127.0.0.2", 0) for address in bound)
 
 
 def test_exclusive_reservation_and_remove(config, spec):
