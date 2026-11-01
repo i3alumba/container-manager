@@ -5,6 +5,8 @@ import threading
 from .errors import Failure
 from .models import Port, canonical_id, validate_port
 from .inspection import listener_ready
+from .allocation import Allocation
+from .native_tcp import NativeTCP
 
 PROJECT = "pp-ubuntu"
 POOL = "pp-ubuntu-ssd"
@@ -40,9 +42,83 @@ class Incus:
         self.lock = threading.Lock()
         self.instance_locks: dict[str, threading.RLock] = {}
         self.ready = ready
+        self.allocation = Allocation(self)
+        self.native = NativeTCP(self)
         for row in store.ownership():
             if row["state"] == "creating":
                 store.own(row["id"], json.loads(row["spec"]), "error")
+
+    def query(self, uri):
+        try:
+            result = self.runner(
+                ["incus", "query", uri],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=True,
+            )
+            value = json.loads(result.stdout)
+            return value.get("metadata", value) if isinstance(value, dict) else value
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+            raise Failure("incus_query_unavailable") from None
+
+    def native_record(self, spec):
+        record = next(
+            (r for r in self.store.native_records() if r["id"] == spec["id"]), None
+        )
+        if (
+            not record
+            or json.loads(record["spec"]) != spec
+            or record["transport"] != "native_tcp_v1"
+            or record["address_version"] != 1
+        ):
+            raise Failure("proxy_requires_reconciliation", 409)
+        return record
+
+    def recover(self):
+        records = {r["id"]: r for r in self.store.native_records()}
+        for row in self.store.ownership():
+            spec = json.loads(row["spec"])
+            if spec.get("protocol") != "tcp":
+                continue
+            record = records.get(row["id"])
+            if not record or record["state"] not in {"active", "paused"}:
+                if record:
+                    self.store.native_state(spec, "error")
+                else:
+                    self.store.own(row["id"], spec, "error")
+                continue
+            with self.instance_lock(spec["instance_id"]):
+                try:
+                    pin = self.store.address_binding(spec["instance_id"])
+                    if not pin or pin["state"] != "ready":
+                        raise Failure("address_requires_reconciliation", 409)
+                    _, status = self.allocation.validate(spec["instance_id"], pin)
+                    self.inspector.check("tcp", spec["public_port"])
+                    active = status == "running" and record["state"] == "active"
+                    self.native.bind(spec, active)
+                    self.store.native_state(spec, "active" if active else "paused")
+                except Failure:
+                    if spec["id"] in self.native.bindings:
+                        self.native.pause(spec)
+                    self.store.native_state(spec, "error")
+
+    def pause_native_validation(self, binding, generation: int, state: str):
+        # Match both identity and generation under the same instance lock as
+        # stop/start. Never acquire that lock while holding clients_lock.
+        spec = binding.spec
+        with self.instance_lock(spec["instance_id"]):
+            with binding.clients_lock:
+                if (
+                    self.native.bindings.get(spec["id"]) is not binding
+                    or binding.generation != generation
+                ):
+                    return
+            self.native.pause(spec)
+            self.store.native_state(spec, state)
+
+    def close(self):
+        self.native.close()
 
     def instance_lock(self, resource: str):
         canonical_id(resource)
@@ -104,6 +180,7 @@ class Incus:
                 raise Failure("operator_profile_mismatch")
             if set(devices) != {"root", "eth0"}:
                 raise Failure("operator_profile_mismatch")
+            return profile
         except (
             OSError,
             subprocess.SubprocessError,
@@ -161,6 +238,31 @@ class Incus:
                 return "missing"
             if json.loads(row["spec"]) != spec:
                 raise Failure("ownership_conflict", 409)
+            if spec["protocol"] == "tcp":
+                try:
+                    record = self.native_record(spec)
+                    pin = self.store.address_binding(spec["instance_id"])
+                    if not pin or pin["state"] != "ready":
+                        raise Failure("address_requires_reconciliation", 409)
+                    _, status = self.allocation.validate(spec["instance_id"], pin)
+                    if status == "stopped" and record["state"] == "active":
+                        self.native.pause(spec)
+                        self.store.native_state(spec, "paused")
+                        record["state"] = "paused"
+                    if record["state"] not in {
+                        "active",
+                        "paused",
+                    } or not self.native.ready(spec, record["state"] == "active"):
+                        raise Failure("native_tcp_not_ready")
+                    return "ready"
+                except Failure:
+                    if spec["id"] in self.native.bindings:
+                        self.native.pause(spec)
+                    if any(r["id"] == spec["id"] for r in self.store.native_records()):
+                        self.store.native_state(spec, "error")
+                    else:
+                        self.store.own(spec["id"], spec, "error")
+                    return "error"
             # A stopped guest legitimately has no proxy process until next start.
             if (
                 row["state"] == "ready"
@@ -285,8 +387,71 @@ class Incus:
     def power(self, resource: str, start: bool):
         with self.instance_lock(resource):
             self.require(resource)
-            # No force flag; graceful stop failure is an operation failure.
-            self.command(["start" if start else "stop", owned_name(resource)])
+            specs = [
+                json.loads(r["spec"])
+                for r in self.store.native_records()
+                if json.loads(r["spec"])["instance_id"] == resource
+            ]
+            if start:
+                owned_tcp = [
+                    row
+                    for row in self.store.ownership()
+                    if (owned := json.loads(row["spec"])).get("protocol") == "tcp"
+                    and owned.get("instance_id") == resource
+                ]
+                if {row["id"] for row in owned_tcp} != {spec["id"] for spec in specs}:
+                    raise Failure("proxy_requires_reconciliation", 409)
+                for row in owned_tcp:
+                    spec = json.loads(row["spec"])
+                    record = self.native_record(spec)
+                    pin = self.store.address_binding(resource)
+                    if (
+                        row["state"] != "ready"
+                        or record["state"] != "paused"
+                        or not pin
+                        or pin["state"] != "ready"
+                        or pin["version"] != record["address_version"]
+                        or not self.native.ready(spec, False)
+                    ):
+                        raise Failure("proxy_requires_reconciliation", 409)
+            if not start:
+                for spec in specs:
+                    record = self.native_record(spec)
+                    if spec["id"] in self.native.bindings:
+                        self.native.pause(spec)
+                    self.store.native_state(
+                        spec,
+                        (
+                            "paused"
+                            if record["state"] in {"active", "paused"}
+                            else "error"
+                        ),
+                    )
+            try:
+                if start:
+                    for spec in specs:
+                        record = self.native_record(spec)
+                        if record["state"] != "paused" or not self.native.ready(
+                            spec, False
+                        ):
+                            raise Failure("proxy_requires_reconciliation", 409)
+                        self.allocation.pin(resource)
+                # No force flag; a failed stop leaves closed streams and error leases.
+                self.command(["start" if start else "stop", owned_name(resource)])
+                if start:
+                    for spec in specs:
+                        if self.native_record(spec)["state"] != "paused":
+                            raise Failure("proxy_requires_reconciliation", 409)
+                        pin = self.allocation.pin(resource)
+                        self.allocation.validate(resource, pin)
+                        self.native.resume(spec)
+                        self.store.native_state(spec, "active")
+            except BaseException:
+                for spec in specs:
+                    if spec["id"] in self.native.bindings:
+                        self.native.pause(spec)
+                    self.store.native_state(spec, "error")
+                raise
 
     def publish(self, spec: dict):
         canonical_id(spec["id"])
@@ -299,10 +464,31 @@ class Incus:
                 (r for r in self.store.ownership() if r["id"] == spec["id"]), None
             )
             if old:
-                if old["state"] == "ready" and json.loads(old["spec"]) == spec:
+                if (
+                    old["state"] == "ready"
+                    and json.loads(old["spec"]) == spec
+                    and self.port_status(spec) == "ready"
+                ):
                     return
                 raise Failure("proxy_requires_reconciliation", 409)
             self.inspector.check(port.protocol, port.public_port)
+            if port.protocol == "tcp":
+                pin = self.allocation.pin(spec["instance_id"])
+                _, status = self.allocation.validate(spec["instance_id"], pin)
+                self.store.native_state(spec, "creating")
+                try:
+                    self.native.bind(spec, status == "running")
+                    if not self.native.ready(spec, status == "running"):
+                        raise Failure("native_tcp_not_ready")
+                    self.store.native_state(
+                        spec, "active" if status == "running" else "paused"
+                    )
+                except BaseException:
+                    if spec["id"] in self.native.bindings:
+                        self.native.pause(spec)
+                    self.store.native_state(spec, "error")
+                    raise
+                return
             self.store.own(spec["id"], spec, "creating")
             try:
                 self.command(
@@ -344,6 +530,17 @@ class Incus:
             # need operator reconciliation, not an assumption that nothing exists.
             if old["state"] != "ready":
                 raise Failure("proxy_requires_reconciliation", 409)
+            if spec["protocol"] == "tcp":
+                record = self.native_record(spec)
+                if record["state"] not in {"active", "paused"}:
+                    raise Failure("proxy_requires_reconciliation", 409)
+                try:
+                    self.native.remove(spec)
+                    self.store.remove_native(spec)
+                except BaseException:
+                    self.store.native_state(spec, "error")
+                    raise
+                return
             self.command(
                 [
                     "config",

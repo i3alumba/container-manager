@@ -31,6 +31,16 @@ class Store:
                 CREATE TABLE IF NOT EXISTS operations (
                   id TEXT PRIMARY KEY, action TEXT NOT NULL, resource TEXT NOT NULL,
                   state TEXT NOT NULL, actor TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS address_bindings_v1 (
+                  instance_id TEXT PRIMARY KEY, nic TEXT NOT NULL,
+                  network TEXT NOT NULL, mac TEXT NOT NULL, address TEXT NOT NULL,
+                  version INTEGER NOT NULL CHECK(version=1), state TEXT NOT NULL,
+                  UNIQUE(network,address));
+                CREATE TABLE IF NOT EXISTS native_tcp_v1 (
+                  id TEXT PRIMARY KEY, spec TEXT NOT NULL, public_port INTEGER UNIQUE NOT NULL,
+                  transport TEXT NOT NULL CHECK(transport='native_tcp_v1'),
+                  address_version INTEGER NOT NULL CHECK(address_version=1),
+                  state TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ownership (
                   id TEXT PRIMARY KEY, spec TEXT NOT NULL, state TEXT NOT NULL);
             """)
@@ -117,6 +127,87 @@ class Store:
     def disown(self, resource: str):
         with self.transaction() as db:
             db.execute("DELETE FROM ownership WHERE id=?", (resource,))
+
+    def address_binding(self, resource):
+        with self.transaction() as db:
+            row = db.execute(
+                "SELECT * FROM address_bindings_v1 WHERE instance_id=?", (resource,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def save_address(self, binding, state):
+        keys = ("instance_id", "nic", "network", "mac", "address", "version")
+        with self.transaction() as db:
+            old = db.execute(
+                "SELECT * FROM address_bindings_v1 WHERE instance_id=?",
+                (binding["instance_id"],),
+            ).fetchone()
+            if old and any(old[key] != binding[key] for key in keys):
+                raise Failure("address_ownership_conflict", 409)
+            try:
+                db.execute(
+                    "INSERT INTO address_bindings_v1 VALUES(?,?,?,?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET state=excluded.state",
+                    (*[binding[key] for key in keys], state),
+                )
+            except sqlite3.IntegrityError:
+                raise Failure("address_allocation_conflict", 409) from None
+
+    def native_records(self):
+        with self.transaction() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM native_tcp_v1")]
+
+    def native_state(self, spec, state):
+        encoded = json.dumps(spec, sort_keys=True)
+        with self.transaction() as db:
+            old = db.execute(
+                "SELECT spec FROM ownership WHERE id=?", (spec["id"],)
+            ).fetchone()
+            if old and old[0] != encoded:
+                raise Failure("ownership_conflict", 409)
+            native = db.execute(
+                "SELECT spec FROM native_tcp_v1 WHERE id=?", (spec["id"],)
+            ).fetchone()
+            if native and native[0] != encoded:
+                raise Failure("ownership_conflict", 409)
+            if old and not native:
+                raise Failure("proxy_requires_reconciliation", 409)
+            binding = db.execute(
+                "SELECT state FROM address_bindings_v1 WHERE instance_id=?",
+                (spec["instance_id"],),
+            ).fetchone()
+            if (not binding or binding[0] != "ready") and not (
+                native and state == "error"
+            ):
+                raise Failure("address_requires_reconciliation", 409)
+            try:
+                db.execute(
+                    "INSERT INTO native_tcp_v1 VALUES(?,?,?,'native_tcp_v1',1,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state",
+                    (spec["id"], encoded, spec["public_port"], state),
+                )
+            except sqlite3.IntegrityError:
+                raise Failure("native_tcp_allocation_conflict", 409) from None
+            db.execute(
+                "INSERT INTO ownership VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state",
+                (
+                    spec["id"],
+                    encoded,
+                    (
+                        "ready"
+                        if state in {"active", "paused"}
+                        else "error" if state == "error" else "creating"
+                    ),
+                ),
+            )
+
+    def remove_native(self, spec):
+        with self.transaction() as db:
+            row = db.execute(
+                "SELECT spec FROM native_tcp_v1 WHERE id=?", (spec["id"],)
+            ).fetchone()
+            if not row or row[0] != json.dumps(spec, sort_keys=True):
+                raise Failure("ownership_conflict", 409)
+            db.execute("DELETE FROM native_tcp_v1 WHERE id=?", (spec["id"],))
+            db.execute("DELETE FROM ownership WHERE id=?", (spec["id"],))
 
     def recover_controller(self):
         with self.transaction() as db:

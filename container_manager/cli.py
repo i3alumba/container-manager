@@ -55,14 +55,13 @@ def main():
                 if config.mode == "node"
                 else Relay(config, store, inspector)
             )
-            if config.mode == "relay":
-                backend.recover()
-            host = server(config, backend, inspector)
-            host.start()
             try:
-                host.wait_for_termination()
-            except KeyboardInterrupt:
-                host.stop(5).wait()
+                backend.recover()
+                host = server(config, backend, inspector)
+                host.start()
+                try:
+                    host.wait_for_termination()
+                except KeyboardInterrupt:
+                    host.stop(5).wait()
             finally:
-                if config.mode == "relay":
-                    backend.close()
+                backend.close()

@@ -25,7 +25,48 @@ PROFILE = {
 }
 
 
-def test_incus_fixed_security_persistent_home_and_secret_stdin(config, spec):
+class FakeNative:
+    def __init__(self, ready=True):
+        self.bindings = {}
+        self.calls = []
+        self.is_ready = ready
+
+    def bind(self, spec, active):
+        self.calls.append(("bind", spec, active))
+        self.bindings[spec["id"]] = spec
+
+    def ready(self, spec, active):
+        return self.is_ready
+
+    def pause(self, spec):
+        self.calls.append(("pause", spec))
+
+    def resume(self, spec):
+        self.calls.append(("resume", spec))
+
+    def remove(self, spec):
+        self.calls.append(("remove", spec))
+
+
+def inject_native(node, spec, ready=True):
+    pin = {
+        "instance_id": spec["instance_id"],
+        "nic": "eth0",
+        "network": "ppub0",
+        "address": "10.211.0.42",
+        "mac": "10:66:6a:aa:bb:cc",
+        "version": 1,
+    }
+    node.store.save_address(pin, "ready")
+    node.allocation = SimpleNamespace(
+        pin=lambda _: pin, validate=lambda *_: (pin, "running")
+    )
+    node.native = FakeNative(ready)
+
+
+@pytest.mark.parametrize("protocol", ["tcp", "udp"])
+def test_incus_fixed_security_persistent_home_and_secret_stdin(config, spec, protocol):
+    spec["protocol"] = protocol
     calls = []
 
     def runner(argv, **kwargs):
@@ -78,9 +119,15 @@ def test_incus_fixed_security_persistent_home_and_secret_stdin(config, spec):
     )
     assert "ssh-keygen -A" in BOOTSTRAP and "sshd -t" in BOOTSTRAP
     assert password.encode() not in open(config.database, "rb").read()
+    if protocol == "tcp":
+        inject_native(node, spec)
     node.publish(spec)
-    assert "listen=tcp:10.200.73.2:2223" in calls[-1][0]
-    assert "connect=tcp:127.0.0.1:22" in calls[-1][0]
+    if protocol == "tcp":
+        assert node.native.calls == [("bind", spec, True)]
+        assert not any("proxy" in argv for argv, _ in calls)
+    else:
+        assert "listen=udp:10.200.73.2:2223" in calls[-1][0]
+        assert "connect=udp:127.0.0.1:22" in calls[-1][0]
     node.power(resource, False)
     node.power(resource, True)
     node.password(resource, password)
@@ -123,7 +170,10 @@ def test_owned_uuid_only(resource):
         owned_name(resource)
 
 
-def test_proxy_readiness_failure_retains_owned_error(config, spec):
+@pytest.mark.parametrize("protocol", ["tcp", "udp"])
+def test_proxy_readiness_failure_retains_owned_error(config, spec, protocol):
+    spec["protocol"] = protocol
+
     def runner(argv, **kwargs):
         return SimpleNamespace(
             returncode=0, stderr=b"", stdout=json.dumps(PROFILE).encode()
@@ -136,7 +186,9 @@ def test_proxy_readiness_failure_retains_owned_error(config, spec):
         "ready",
     )
     node = Incus(config, store, FreeInspector(), runner, ready=lambda *args: False)
-    with pytest.raises(Failure, match="proxy_not_ready"):
+    if protocol == "tcp":
+        inject_native(node, spec, ready=False)
+    with pytest.raises(Failure, match="not_ready"):
         node.publish(spec)
     assert (
         next(r for r in store.ownership() if r["id"] == spec["id"])["state"] == "error"

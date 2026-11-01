@@ -33,14 +33,17 @@ separate `master` PR; the parent updates its gitlink only after child publicatio
 
 ## Current release blockers
 
-Extraction does **not** approve deployment or alter runtime behavior. Real-path
-acceptance found intermittent reply truncation after TCP half-close through the
-current gamma Incus TCP proxy. Normal SSH/TCP echo and UDP nonce replies worked,
+Extraction does **not** approve deployment. Real-path acceptance found
+intermittent reply truncation after TCP half-close through the legacy gamma Incus
+TCP proxy. The operator has approved the bounded native TCP guest-interface
+semantics implemented below; real-path acceptance of this replacement is still
+required. Normal SSH/TCP echo and UDP nonce replies worked,
 but generic TCP release remains blocked; local tests do not waive this failure.
 Additional TCP-edit, native power/restart and full root-plus-home restore gates
-remain unaccepted. The restricted project currently denies backup creation; no
-restriction has been relaxed. Proposed TCP-target behavior and operator backup
-permission changes require explicit approval. Parent release PR
+remain unaccepted. The restricted project backup gate remains operator-owned. A separate temporary
+operator backup permission was approved, not an application permission or a change
+to project restrictions in this repository. No backup/restore result is claimed
+here. Parent release PR
 [#185](https://github.com/LumbaBalumba/public-page/pull/185) remains Draft.
 New native application units and test forwarding were stopped/disabled; only an
 owned stopped scratch guest retains test data. Existing production workloads and
@@ -53,7 +56,8 @@ browser -> same-origin nginx /api/containers/ -> controller (non-root)
     controller -> http://auth:8000/api/user/ (live explicit bearer, every request)
     controller -- private gRPC/mTLS --> gamma node agent (host root / Incus socket)
     controller -- private gRPC/mTLS --> alpha relay (unprivileged native process)
-WAN:port -> upstream NAT -> alpha LAN relay -> gamma 10.200.73.2:same-port -> Incus proxy -> guest
+WAN TCP:port -> upstream NAT -> alpha LAN relay -> gamma native TCP -> pinned guest IPv4:target
+WAN UDP:port -> upstream NAT -> alpha LAN relay -> gamma Incus UDP proxy -> guest loopback:target
 ```
 
 The gamma agent is a **host-root trust boundary**: Incus socket access is equivalent
@@ -88,13 +92,17 @@ cryptographically zeroized; disable core dumps and keep tracing/body capture off
 - Operator pins a **locally available, verified 64-hex Ubuntu 24.04 LTS image
   fingerprint**. No remote image URL, profile or user-selected image is accepted.
 - UUID-owned names `pp-ubuntu-<canonical-uuid>`; no user slug is an Incus name.
-  Every CLI call uses argv, fixed `--project pp-ubuntu`, no shell. Only a constant
+  Ordinary CLI calls use argv, fixed `--project pp-ubuntu`, no shell. Read-only
+  `incus query` calls use project scope in the URI only; shared-network and
+  all-project allocation queries intentionally have no project scope. Only a constant
   guest bootstrap uses `/bin/sh -c`.
 - Full persistent root, including `/etc`, packages and SSH host keys; separate
   managed custom volume `<owned-name>-home`, mounted at `/home` from the same pool.
   Stop/start/port/password changes never recreate or delete either volume.
 - Uses only the fixed operator-managed project `default` profile; never overrides
-  its root pool, managed NIC, IPv4/IPv6/MAC filtering or port isolation. The agent
+  its root pool, managed network, IPv4/IPv6/MAC filtering or port isolation.
+  Native TCP alone pins the existing legitimate DHCP IPv4 using a local `eth0`
+  override cloned from that profile, changing only `ipv4.address`. The agent
   verifies that exact fixed profile (including no extra devices) before creation,
   and fails closed on operator drift. Explicit
   `security.privileged=false`, `security.nesting=false`,
@@ -228,10 +236,15 @@ router changes are performed by the application.
    a globally unique `(protocol,public_port)` reservation and operation state.
 2. Both hosts' **actual** listeners and forwarding rules are checked again. Alpha
    then acquires an exclusive public socket (no reuse flags), held while reserved.
-3. Gamma adds only the UUID-owned Incus proxy, bound to
-   `10.200.73.2:public_port`, connecting inside the guest to
-   `127.0.0.1:target_port`. Incus success **and kernel socket presence on that fixed
-   address** establish readiness, not guest service reachability.
+3. For **new TCP mappings**, gamma validates a versioned, UUID-owned static IPv4
+   pin and exclusively binds a native listener on `10.200.73.2:public_port` under
+   the already trusted root node agent. The upstream is only the pinned guest's
+   `10.211.0.x:target_port`, never DNS, a request address, or a guest-reported IP.
+   **TCP applications must listen on their own guest IPv4 or `0.0.0.0`, not only
+   `127.0.0.1`.** Readiness requires the exact in-process spec, live accept thread
+   and owned socket, not an unrelated kernel listener. UDP is unchanged: a
+   UUID-owned Incus UDP proxy on the fixed gamma address connects to guest
+   `127.0.0.1:target_port`, with the existing kernel readiness check.
 4. Alpha activates forwarding to the **fixed operator gamma WireGuard IP** and the
    same public port only after readiness. No user upstream address exists.
 5. Failures compensate only new owned mappings. Existing ports and guest data are
@@ -289,8 +302,49 @@ reconciliation job; they never wait for private status RPC deadlines before open
 or responding on HTTP. Inventory is a metadata snapshot while that job runs.
 Missing/unavailable/error mappings become error, not free. Recovery errors
 are not automatically cleared, nor are partial volumes deleted. Stop preserves
-alpha allocations; gamma proxies bind again on start. Explicit remove errors may
+alpha allocations; native TCP closes all streams before Incus stop and keeps its
+exclusive gamma socket bound but paused. Start validates the same recorded pin
+before resuming only known transports. UDP proxies bind again on start. Explicit remove errors may
 leave a mapping unavailable but reserved until operator review.
+
+### Native TCP allocation and recovery
+
+Before the first pin the owned guest must be running and inheriting the fixed
+`eth0` profile. The daemon's `volatile.eth0.hwaddr`, exact managed `ppub0` bridge
+(`10.211.0.1/24`, IPv6 disabled), filtering fields, instance project/type/name,
+root profile and full all-project NIC claims are checked against the complete
+shared-network DHCP lease domain. Hostnames and guest state IPs are not authority.
+The one unambiguous current dynamic lease is preferred, never a first-free scan;
+gateway/network/broadcast/foreign/duplicate allocations fail closed. A node-wide
+allocation lock and SQLite `UNIQUE(network,address)` reserve the intent before
+`config device override ... eth0 ipv4.address=...`. Readback must match the exact
+local/expanded NIC, MAC and claims. An already-local dynamic NIC is reconciliation
+territory: no `device set` or arbitrary overwrite is attempted, and its error
+intent retains the address reservation. Once recorded ready, the same static local
+NIC is validated read-only; missing dynamic leases while stopped/restarting are
+allowed. Pin failure/ambiguous mutation never frees or chooses another address.
+
+The **existing node SQLite** contains `address_bindings_v1` (UUID, NIC, network,
+MAC, static address, version, pending/ready/error) and `native_tcp_v1` (exact mapping
+spec, transport/address version, creating/active/paused/error). Native transport
+and generic mapping ownership transitions commit atomically. There is no fourth
+database. Before activation, recovery and every upstream connection the agent
+revalidates the daemon-authoritative pin and uniqueness. At most eight concurrent
+root validations are admitted (excess clients are rejected); daemon reads have
+5s per-command deadlines. TCP reuses the byte pump with 128 global clients,
+3s connect / 120s idle deadlines and at most 64KiB pending in each direction.
+Generation checks after validation/connect prevent pause/remove races from
+forwarding; pause/remove/agent shutdown close existing streams. Agent shutdown
+preserves durable leases. Recovery validates and rebinds known active/paused
+records; a stopped guest stays stopped and its binding stays paused. No service
+health or external reachability is inferred.
+
+**Legacy Incus TCP ownership is not migrated, removed, rebound or automatically
+repaired.** It becomes an error requiring operator reconciliation and retains its
+reservation. Interrupted creates, binding failures and ambiguous removal also
+retain error ownership. Old Incus devices must be handled only by a separately
+authorized operator procedure; never steal their listeners or clear metadata to
+make a port appear free. UDP ownership and readiness remain unchanged.
 
 ## Operator prerequisites (not performed by this implementation)
 
@@ -301,7 +355,8 @@ leave a mapping unavailable but reserved until operator review.
   address/native ACLs, Ubuntu fingerprint and private certificate authority.
 - Fixed project default profile must retain SSD root and `eth0` on `ppub0` with
   IPv4/IPv6/MAC filtering and port isolation. The app uses no network/root-device
-  overrides; review operator drift before admissions. Shared default-project image
+  overrides except the validated native TCP static IPv4 pin above; review
+  operator drift before admissions. Shared default-project image
   cache is supported (`features.images=false`). Project CPU/memory limits should
   independently enforce the 4 CPU / 16GB baseline; VM limit0; managed-only disks/NICs,
   isolated privilege, blocked nesting and proxy permission.
@@ -470,6 +525,11 @@ nginx integration/CI/Kubernetes are parent/operator scope, outside this director
   or `.backup`, not a lone copy of a live DB without WAL. Protect metadata backups
   and keep consistent timestamps. Preserve operator configs/certificate inventory;
   private key backup uses the existing secure secret mechanism, never Git.
+  The node backup must include both `address_bindings_v1` and `native_tcp_v1`
+  together with ownership (same SQLite snapshot); do not restore those tables
+  independently or omit static NIC config from the guest restore. These tables
+  add no fourth database. A restored address/UUID/MAC/config discrepancy blocks
+  publication and requires operator reconciliation, never automatic reassignment.
 - Guest root and custom `/home` volumes are separate. Operator-approved quiescing
   and Incus exports/snapshots must include both; instance export alone must not be
   assumed to include a custom volume. Restore on the same verified NVMe pool and

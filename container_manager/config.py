@@ -113,7 +113,8 @@ class Config:
         ):
             raise ValueError("invalid reserved ports")
         if config.mode == "node" and (
-            config.gamma_ip != config.wireguard_ip
+            config.gamma_ip != "10.200.73.2"
+            or config.gamma_ip != config.wireguard_ip
             or not re.fullmatch(r"[0-9a-f]{64}", config.image_fingerprint)
         ):
             raise ValueError("node requires fixed image fingerprint and gamma address")
