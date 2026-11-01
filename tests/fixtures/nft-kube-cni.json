@@ -1,0 +1,728 @@
+{
+  "nftables": [
+    {
+      "metainfo": {
+        "json_schema_version": 1
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "PREROUTING",
+        "type": "nat",
+        "hook": "prerouting",
+        "prio": -100
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "OUTPUT",
+        "type": "nat",
+        "hook": "output",
+        "prio": -100
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "POSTROUTING",
+        "type": "nat",
+        "hook": "postrouting",
+        "prio": -100
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "DOCKER"
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "KUBE-SERVICES"
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "KUBE-EXT-SSH"
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "KUBE-SVC-SSH"
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "KUBE-SEP-SSH"
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "KUBE-MARK-MASQ"
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "CNI-HOSTPORT-DNAT"
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "CNI-HOSTPORT-SETMARK"
+      }
+    },
+    {
+      "chain": {
+        "family": "ip",
+        "table": "nat",
+        "name": "CNI-DN-EXAMPLE"
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "PREROUTING",
+        "expr": [
+          {
+            "xt": {
+              "type": "match",
+              "name": "comment"
+            }
+          },
+          {
+            "jump": {
+              "target": "KUBE-SERVICES"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "PREROUTING",
+        "expr": [
+          {
+            "xt": {
+              "type": "match",
+              "name": "addrtype"
+            }
+          },
+          {
+            "jump": {
+              "target": "DOCKER"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "PREROUTING",
+        "expr": [
+          {
+            "xt": {
+              "type": "match",
+              "name": "addrtype"
+            }
+          },
+          {
+            "jump": {
+              "target": "CNI-HOSTPORT-DNAT"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "OUTPUT",
+        "expr": [
+          {
+            "xt": {
+              "type": "match",
+              "name": "comment"
+            }
+          },
+          {
+            "jump": {
+              "target": "KUBE-SERVICES"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "OUTPUT",
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "daddr"
+                }
+              },
+              "right": {
+                "prefix": {
+                  "addr": "127.0.0.0",
+                  "len": 8
+                }
+              }
+            }
+          },
+          {
+            "xt": {
+              "type": "match",
+              "name": "addrtype"
+            }
+          },
+          {
+            "jump": {
+              "target": "DOCKER"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-SERVICES",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "daddr"
+                }
+              },
+              "right": "10.43.0.10"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "protocol"
+                }
+              },
+              "right": "tcp"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": 5432
+            }
+          },
+          {
+            "jump": {
+              "target": "KUBE-SVC-SSH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-SERVICES",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "daddr"
+                }
+              },
+              "right": "10.43.0.11"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "protocol"
+                }
+              },
+              "right": "tcp"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": 8000
+            }
+          },
+          {
+            "jump": {
+              "target": "KUBE-SVC-SSH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-SERVICES",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "daddr"
+                }
+              },
+              "right": "198.51.100.10"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "protocol"
+                }
+              },
+              "right": "tcp"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": 2222
+            }
+          },
+          {
+            "jump": {
+              "target": "KUBE-EXT-SSH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-EXT-SSH",
+        "expr": [
+          {
+            "xt": {
+              "type": "match",
+              "name": "comment"
+            }
+          },
+          {
+            "jump": {
+              "target": "KUBE-MARK-MASQ"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-EXT-SSH",
+        "expr": [
+          {
+            "jump": {
+              "target": "KUBE-SVC-SSH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-SVC-SSH",
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "prefix": {
+                  "addr": "10.42.0.0",
+                  "len": 16
+                }
+              }
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "daddr"
+                }
+              },
+              "right": "10.43.0.12"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": 2222
+            }
+          },
+          {
+            "jump": {
+              "target": "KUBE-MARK-MASQ"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-SVC-SSH",
+        "expr": [
+          {
+            "jump": {
+              "target": "KUBE-SEP-SSH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-SEP-SSH",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "10.42.0.20"
+            }
+          },
+          {
+            "jump": {
+              "target": "KUBE-MARK-MASQ"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-SEP-SSH",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "protocol"
+                }
+              },
+              "right": "tcp"
+            }
+          },
+          {
+            "xt": {
+              "type": "match",
+              "name": "comment"
+            }
+          },
+          {
+            "dnat": {
+              "addr": "10.42.0.20",
+              "port": 2222
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "KUBE-MARK-MASQ",
+        "expr": [
+          {
+            "xt": {
+              "type": "target",
+              "name": "MARK"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "CNI-HOSTPORT-DNAT",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "protocol"
+                }
+              },
+              "right": "tcp"
+            }
+          },
+          {
+            "xt": {
+              "type": "match",
+              "name": "comment"
+            }
+          },
+          {
+            "xt": {
+              "type": "match",
+              "name": "multiport"
+            }
+          },
+          {
+            "jump": {
+              "target": "CNI-DN-EXAMPLE"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "CNI-DN-EXAMPLE",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "prefix": {
+                  "addr": "10.42.0.0",
+                  "len": 24
+                }
+              }
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": 2222
+            }
+          },
+          {
+            "jump": {
+              "target": "CNI-HOSTPORT-SETMARK"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "CNI-DN-EXAMPLE",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "127.0.0.1"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": 2222
+            }
+          },
+          {
+            "jump": {
+              "target": "CNI-HOSTPORT-SETMARK"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "CNI-DN-EXAMPLE",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": 2222
+            }
+          },
+          {
+            "xt": {
+              "type": "target",
+              "name": "DNAT"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "CNI-HOSTPORT-SETMARK",
+        "expr": [
+          {
+            "xt": {
+              "type": "match",
+              "name": "comment"
+            }
+          },
+          {
+            "xt": {
+              "type": "target",
+              "name": "MARK"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "ip",
+        "table": "nat",
+        "chain": "POSTROUTING",
+        "expr": [
+          {
+            "xt": {
+              "type": "target",
+              "name": "MASQUERADE"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
