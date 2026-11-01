@@ -959,3 +959,131 @@ def test_adjacent_targets_cannot_be_hidden_by_target_like_operands(operand, opti
     # consume the real adjacent owned-target pair as another option's operand.
     with pytest.raises(RuntimeError):
         guard.jump(["-i", operand, option, "PPUBUNTU_RPC"])
+
+
+def networkpolicy_sets():
+    return [
+        "-m",
+        "set",
+        "--match-set",
+        "KUBE-SRC-ABCDEFGHIJKLMNOP",
+        "src",
+        "-m",
+        "set",
+        "--match-set",
+        "KUBE-DST-ABCDEFGHIJKLMNOP",
+        "dst",
+    ]
+
+
+def test_positive_ipset_mark_and_nflog_are_opaque_nonverdicts(policy):
+    firewall = installed_prefix(
+        policy, [["-s", local_pod(policy), "-j", "SYNTHETIC-NETPOL"]]
+    )
+    firewall.rules["SYNTHETIC-NETPOL"] = [
+        [
+            *networkpolicy_sets(),
+            "-p",
+            "tcp",
+            "-m",
+            "tcp",
+            "--dport",
+            "8000",
+            "-j",
+            "MARK",
+            "--set-xmark",
+            "0x10000/0x10000",
+        ],
+        [
+            *networkpolicy_sets(),
+            "-m",
+            "mark",
+            "--mark",
+            "0x10000/0x10000",
+            "-j",
+            "RETURN",
+        ],
+        [
+            "-m",
+            "mark",
+            "!",
+            "--mark",
+            "0x10000/0x10000",
+            "-j",
+            "NFLOG",
+            "--nflog-prefix",
+            "DROP by policy synthetic",
+            "--nflog-group",
+            "100",
+        ],
+        ["-j", "MARK", "--set-xmark", "0x20000/0x20000"],
+    ]
+    before = guard.ordered_records(firewall.snapshot())
+    assert guard.ensure(policy, firewall) is False
+    assert firewall.mutations == []
+    assert guard.ordered_records(firewall.snapshot()) == before
+
+
+@pytest.mark.parametrize("source", ["0.0.0.0/0", "local"])
+@pytest.mark.parametrize("states", [None, "NEW", "NEW,ESTABLISHED"])
+def test_ipset_names_never_justify_accept_or_narrow_a_path(policy, source, states):
+    source = local_pod(policy) if source == "local" else source
+    rule = ["-s", source, *networkpolicy_sets()]
+    if states:
+        rule += ["-m", "conntrack", "--ctstate", states]
+    firewall = installed_prefix(policy, [[*rule, "-j", "ACCEPT"]])
+    assert_refused(policy, firewall)
+
+
+def test_ipset_does_not_change_existing_role_local_state_exception(policy):
+    firewall = installed_prefix(
+        policy,
+        [
+            [
+                "-s",
+                local_pod(policy),
+                *networkpolicy_sets(),
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "ESTABLISHED,RELATED",
+                "-j",
+                "ACCEPT",
+            ]
+        ],
+    )
+    assert guard.ensure(policy, firewall) is False
+    assert firewall.mutations == []
+
+
+@pytest.mark.parametrize(
+    "match",
+    [
+        ["-m", "set"],
+        ["-m", "set", "--match-set"],
+        ["-m", "set", "--match-set", "KUBE-SRC-ABCDEFGHIJKLMNOP"],
+        ["-m", "set", "--match-set", "unknown", "src"],
+        ["-m", "set", "--match-set", "KUBE-SRC-ABCDEFGHIJKLMNOPQ", "src"],
+        ["-m", "set", "--match-set", "KUBE-SRC-ABCDEFGHIJKLMNOP", "src,dst"],
+        ["-m", "set", "!", "--match-set", "KUBE-SRC-ABCDEFGHIJKLMNOP", "src"],
+        ["--match-set", "KUBE-SRC-ABCDEFGHIJKLMNOP", "src"],
+        networkpolicy_sets() + networkpolicy_sets()[:5],
+    ],
+)
+def test_only_exact_bounded_positive_set_grammar_is_recognized(policy, match):
+    firewall = installed_prefix(policy, [[*match, "-j", "RETURN"]])
+    assert_refused(policy, firewall)
+
+
+@pytest.mark.parametrize("prefix", ["", "x" * 65, "control\x01", "nonasciié"])
+def test_nflog_prefix_is_bounded_printable_and_not_packet_authority(policy, prefix):
+    firewall = installed_prefix(
+        policy, [["-j", "NFLOG", "--nflog-prefix", prefix, "--nflog-group", "100"]]
+    )
+    assert_refused(policy, firewall)
+
+
+@pytest.mark.parametrize("target", ["ACCEPT", "RETURN", "MARK"])
+def test_nflog_prefix_effect_is_rejected_on_other_targets(policy, target):
+    firewall = installed_prefix(policy, [["-j", target, "--nflog-prefix", "synthetic"]])
+    assert_refused(policy, firewall)

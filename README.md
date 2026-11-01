@@ -31,23 +31,29 @@ service directory. Import is a merge on a dev-based feature branch, not a new
 copy-only source history. Service changes follow feature → checked `dev` →
 separate `master` PR; the parent updates its gitlink only after child publication.
 
-## Current release blockers
+## Current release status
 
-Extraction does **not** approve deployment. Real-path acceptance found
-intermittent reply truncation after TCP half-close through the legacy gamma Incus
-TCP proxy. The operator has approved the bounded native TCP guest-interface
-semantics implemented below; real-path acceptance of this replacement is still
-required. Normal SSH/TCP echo and UDP nonce replies worked,
-but generic TCP release remains blocked; local tests do not waive this failure.
-Additional TCP-edit, native power/restart and full root-plus-home restore gates
-remain unaccepted. The restricted project backup gate remains operator-owned. A separate temporary
-operator backup permission was approved, not an application permission or a change
-to project restrictions in this repository. No backup/restore result is claimed
-here. Parent release PR
-[#185](https://github.com/LumbaBalumba/public-page/pull/185) remains Draft.
-New native application units and test forwarding were stopped/disabled; only an
-owned stopped scratch guest retains test data. Existing production workloads and
-credentials are not changed by this repository extraction.
+Extraction does **not** approve deployment. Operator acceptance on 2026-11-01
+passed native TCP gamma-direct and WAN paths (60 transfers each, zero truncation),
+UDP nonce replies, pinned-key password SSH, port edits, ordinary power cycles,
+held-stream closure, resource/UID/network isolation and a fresh second create.
+Full root-plus-home archive restore and consistent recovery of the node, relay
+and private acceptance-controller databases passed separately. Temporary backup/import exceptions were
+explicitly approved and the complete original restricted project policy restored
+before guest start; neither exception is a standing application permission.
+Both marked scratch guests, their homes, mappings and pins were subsequently
+removed; archives, metadata snapshots and private audit records were retained.
+Original workloads/PVCs/credentials/packages/kernel/old-service identities passed
+preservation comparison. New agents are enabled with empty ownership registries.
+Only new-agent and guard restarts were tested, **not host reboot**.
+
+Parent release PR
+[#185](https://github.com/LumbaBalumba/public-page/pull/185) remains Draft pending
+exact source pinning, running-controller NetworkPolicy proof and checked selective
+release. New controller prerequisites and nonroot Pod routing/storage/mTLS/Auth
+preflight are prepared; this does not mean the controller application is deployed.
+Live administrator/revocation and same-origin browser acceptance remain release
+gates before production-user admission. Local tests do not replace those checks.
 
 ## Architecture and trust boundaries
 
@@ -399,6 +405,12 @@ make a port appear free. UDP ownership and readiness remain unchanged.
   change. Disjoint destination/protocol/port ACCEPTs are also permitted.
   The proof deliberately over-approximates paths, including after RETURN or
   terminal verdicts; mark, addrtype and rate predicates confer no exemption.
+  Positive K3s `-m set --match-set KUBE-{SRC,DST}-<16 uppercase alphanumerics>`
+  matches (one `src` and one `dst` at most) are also opaque over-approximations:
+  no set lookup, name or contents can narrow a proof path or justify ACCEPT.
+  NFLOG alone may carry a bounded 1..64 printable-ASCII `--nflog-prefix`; it
+  does not change packet headers or authorization. Packet policy and invocation
+  remain unchanged; these additions only recognize nonverdict NetworkPolicy grammar.
   Unknown grammar/effects, cycles, missing targets, duplicate/drifted attachments
   or budget exhaustion refuse, never sample or repair. Bounds are 4MiB / 65,536
   ordered snapshot records / 262,144 tokens / 4,096 bytes per token, and 64
