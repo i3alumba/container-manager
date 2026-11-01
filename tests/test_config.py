@@ -56,3 +56,18 @@ def test_operator_policy_requires_correct_types(tmp_path, field, value):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError):
         Config.load(str(path))
+
+
+def test_node_native_tcp_requires_exact_gamma_address(tmp_path):
+    data = json.loads(Path("examples/node.json").read_text())
+    data.update(
+        bind="10.200.73.3:9443",
+        wireguard_ip="10.200.73.3",
+        gamma_ip="10.200.73.3",
+        host_addresses=["10.200.73.3"],
+        image_fingerprint="a" * 64,
+    )
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        Config.load(str(path))
