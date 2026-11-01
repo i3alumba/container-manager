@@ -384,17 +384,39 @@ make a port appear free. UDP ownership and readiness remain unchanged.
   `pod_cidr` (`10.42.0.0/24`), and sorted unique `reserved_ports` (union of
   `models.RESERVED` and all operator reservations). It restricts only the new
   WG-bound RPC endpoint to the gamma Pod CIDR/owned WG addresses, still requiring
-  mTLS. Gamma proxy INPUT is limited to alpha's source, with all infrastructure
-  and NodePorts returned to the incumbent policy. No NAT/FORWARD/Docker rule is
-  changed. Whole-filter inspection errors fail before mutation; exact leading
-  hooks and owned chain contents must match on repeat. Gamma's proxy chain returns
-  only conntrack `ESTABLISHED` / `REPLY` traffic to incumbent INPUT policy before
-  applying the new-ingress restriction. It does not ACCEPT replies, exempt RELATED
-  traffic or permit non-alpha original-direction ingress. This prevents reply
+  mTLS. Gamma's owned proxy rules deny NEW non-alpha ingress on the protected
+  forwarded span, excluding operator infrastructure and NodePorts. **Effective
+  INPUT preserves existing K3s precedence**, including its role-local Pod
+  ESTABLISHED/RELATED treatment; this is not an all-state alpha-only guarantee.
+  No NAT/FORWARD/Docker or incumbent K3s rule is changed. Whole-filter inspection
+  errors fail before mutation; exact owned hooks and chain contents must match.
+  Both roles accept either the owned hook block first or one exact recognized
+  K3s INPUT hook immediately before that block, only after a read-only proof of
+  every reachable rule/path. Overlapping ACCEPTs must restrict the entire source
+  to the fixed local Pod CIDR and states to ESTABLISHED/RELATED: gamma uses
+  `10.42.0.0/24`, alpha uses `10.42.1.0/24`. The controller/RPC allowlist remains
+  `10.42.0.0/24` plus the two WG peers on both roles; alpha packet rules do not
+  change. Disjoint destination/protocol/port ACCEPTs are also permitted.
+  The proof deliberately over-approximates paths, including after RETURN or
+  terminal verdicts; mark, addrtype and rate predicates confer no exemption.
+  Unknown grammar/effects, cycles, missing targets, duplicate/drifted attachments
+  or budget exhaustion refuse, never sample or repair. Bounds are 4MiB / 65,536
+  ordered snapshot records / 262,144 tokens / 4,096 bytes per token, and 64
+  reachable chains / 2,048 rules / depth32 / 4,096 explored entry/rule contexts.
+  A recognized K3s prefix without the complete owned block refuses fresh install.
+  Gamma's own proxy chain returns only conntrack `ESTABLISHED` / `REPLY` traffic
+  to incumbent INPUT policy before applying its new-ingress restriction. That
+  rule does not ACCEPT replies or exempt RELATED; the earlier incumbent K3s
+  ESTABLISHED/RELATED behavior is preserved separately. This prevents reply
   packets to a host client's in-range ephemeral port from being mistaken for a
   new published connection. Updating an already installed old chain requires a
   separately authorized, whole-filter-verified one-rule transition; the helper
-  intentionally refuses to migrate drift automatically. Partial state, duplicates,
+  intentionally refuses to migrate drift automatically. For that separate root
+  fencing procedure only, the standalone helper exposes read-only
+  `classify(snapshot, trusted_old_chains, unchanged_hooks, config)` and
+  `ordered_records(snapshot)` including policy values, so pre/post evidence can
+  require exactly one approved insertion without modifying/reordering K3s.
+  Partial state, duplicates,
   misplaced hooks or drift require operator review, never automatic flush/repair.
   Serialize with other firewall writers and verify persistence/order after boot.
   The fixed topology is intentional; do not use this helper unchanged elsewhere.
