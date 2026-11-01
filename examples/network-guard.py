@@ -33,7 +33,20 @@ def policy(config):
     ]
     if role == "gamma":
         reserved = [p for p in ports if 3000 <= p <= 50000]
-        rules = []
+        # Return tracked responses to incumbent INPUT policy; never ACCEPT or
+        # exempt original-direction, NEW, RELATED or untracked ingress here.
+        rules = [
+            [
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "ESTABLISHED",
+                "--ctdir",
+                "REPLY",
+                "-j",
+                "RETURN",
+            ]
+        ]
         for protocol in ["tcp", "udp"]:
             for offset in range(0, len(reserved), 15):
                 rules.append(
