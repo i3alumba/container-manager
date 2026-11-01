@@ -73,8 +73,6 @@ class Incus:
             result = self.runner(
                 [
                     "incus",
-                    "--project",
-                    PROJECT,
                     "query",
                     "/1.0/profiles/default?project=pp-ubuntu",
                 ],

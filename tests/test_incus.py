@@ -45,6 +45,9 @@ def test_incus_fixed_security_persistent_home_and_secret_stdin(config, spec):
     password = "TransientSecret42!"
     resource = spec["instance_id"]
     node.create(resource, 2, 4_000_000_000, password)
+    query = next(a for a, _ in calls if "query" in a)
+    assert query == ["incus", "query", "/1.0/profiles/default?project=pp-ubuntu"]
+    assert "--project" not in query  # Incus7.5 query accepts project ONLY in URI.
     argv = next(a for a, kw in calls if "init" in a)
     assert argv[:3] == ["incus", "--project", "pp-ubuntu"]
     assert "--profile" in argv and "default" in argv
