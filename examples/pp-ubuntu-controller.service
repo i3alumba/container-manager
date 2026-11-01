@@ -1,0 +1,22 @@
+[Unit]
+Description=Ubuntu container admin controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pp-ubuntu-controller
+Group=pp-ubuntu-controller
+StateDirectory=pp-ubuntu-controller
+WorkingDirectory=/opt/pp-ubuntu
+ExecStart=/opt/pp-ubuntu/.venv/bin/container-manager --config /etc/pp-ubuntu/controller.json
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadOnlyPaths=/etc/pp-ubuntu
+
+[Install]
+WantedBy=multi-user.target

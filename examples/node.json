@@ -1,0 +1,14 @@
+{
+  "mode": "node",
+  "database": "/var/lib/pp-ubuntu-node/state.sqlite",
+  "bind": "10.200.73.2:9443",
+  "wireguard_ip": "10.200.73.2",
+  "gamma_ip": "10.200.73.2",
+  "host_addresses": ["10.200.73.2", "192.0.2.2"],
+  "ca": "/etc/pp-ubuntu/ca.crt",
+  "cert": "/etc/pp-ubuntu/gamma.crt",
+  "key": "/etc/pp-ubuntu/gamma.key",
+  "controller_cn": "pp-ubuntu-controller",
+  "image_fingerprint": "REPLACE_WITH_OPERATOR_VERIFIED_64_HEX_LOCAL_UBUNTU_24_04_FINGERPRINT",
+  "reserved_ports": [2377, 7946]
+}

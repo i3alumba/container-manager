@@ -1,0 +1,28 @@
+syntax = "proto3";
+package pp.ubuntu.v1;
+
+message Empty {}
+message State { string state = 1; }
+message Port { string id = 1; string protocol = 2; uint32 public_port = 3; uint32 target_port = 4; string instance_id = 5; }
+message Inspection { bool available = 1; string reason = 2; }
+message Instance { string id = 1; uint32 cpu = 2; uint64 memory_bytes = 3; string root_password = 4; }
+message InstanceId { string id = 1; }
+message PowerRequest { string id = 1; bool start = 2; }
+message PasswordRequest { string id = 1; string root_password = 2; }
+service Node {
+  rpc InstanceStatus(InstanceId) returns (State);
+  rpc PortStatus(Port) returns (State);
+  rpc Inspect(Port) returns (Inspection);
+  rpc Create(Instance) returns (Empty);
+  rpc Power(PowerRequest) returns (Empty);
+  rpc Password(PasswordRequest) returns (Empty);
+  rpc Publish(Port) returns (Empty);
+  rpc Remove(Port) returns (Empty);
+}
+service Relay {
+  rpc PortStatus(Port) returns (State);
+  rpc Inspect(Port) returns (Inspection);
+  rpc Reserve(Port) returns (Empty);
+  rpc Activate(Port) returns (Empty);
+  rpc Remove(Port) returns (Empty);
+}

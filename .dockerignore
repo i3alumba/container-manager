@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!container_manager/
+!container_manager/**
+container_manager/**/__pycache__/

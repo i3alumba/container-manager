@@ -1,0 +1,35 @@
+# Synthetic kube-proxy/CNI/empty-Docker dialect, not a private snapshot.
+*nat
+:PREROUTING ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
+:DOCKER - [0:0]
+:KUBE-SERVICES - [0:0]
+:KUBE-EXT-SSH - [0:0]
+:KUBE-SVC-SSH - [0:0]
+:KUBE-SEP-SSH - [0:0]
+:KUBE-MARK-MASQ - [0:0]
+:CNI-HOSTPORT-DNAT - [0:0]
+:CNI-HOSTPORT-SETMARK - [0:0]
+:CNI-DN-EXAMPLE - [0:0]
+-A PREROUTING -m comment --comment "kubernetes service portals" -j KUBE-SERVICES
+-A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER
+-A PREROUTING -m addrtype --dst-type LOCAL -j CNI-HOSTPORT-DNAT
+-A OUTPUT -m comment --comment "kubernetes service portals" -j KUBE-SERVICES
+-A OUTPUT ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER
+-A KUBE-SERVICES -d 10.43.0.10/32 -p tcp -m tcp --dport 5432 -j KUBE-SVC-SSH
+-A KUBE-SERVICES -d 10.43.0.11/32 -p tcp -m tcp --dport 8000 -j KUBE-SVC-SSH
+-A KUBE-SERVICES -d 198.51.100.10/32 -p tcp -m tcp --dport 2222 -j KUBE-EXT-SSH
+-A KUBE-EXT-SSH -m comment --comment "masquerade external destinations" -j KUBE-MARK-MASQ
+-A KUBE-EXT-SSH -j KUBE-SVC-SSH
+-A KUBE-SVC-SSH ! -s 10.42.0.0/16 -d 10.43.0.12/32 -p tcp -m tcp --dport 2222 -j KUBE-MARK-MASQ
+-A KUBE-SVC-SSH -j KUBE-SEP-SSH
+-A KUBE-SEP-SSH -s 10.42.0.20/32 -j KUBE-MARK-MASQ
+-A KUBE-SEP-SSH -p tcp -m tcp -j DNAT --to-destination 10.42.0.20:2222
+-A KUBE-MARK-MASQ -j MARK --set-xmark 0x4000/0x4000
+-A CNI-HOSTPORT-DNAT -p tcp -m multiport --dports 2222,80,443 -j CNI-DN-EXAMPLE
+-A CNI-DN-EXAMPLE -s 10.42.0.0/24 -p tcp -m tcp --dport 2222 -j CNI-HOSTPORT-SETMARK
+-A CNI-DN-EXAMPLE -s 127.0.0.1/32 -p tcp -m tcp --dport 2222 -j CNI-HOSTPORT-SETMARK
+-A CNI-DN-EXAMPLE -p tcp -m tcp --dport 2222 -j DNAT --to-destination 10.42.0.20:2222
+-A CNI-HOSTPORT-SETMARK -j MARK --set-xmark 0x2000/0x2000
+COMMIT

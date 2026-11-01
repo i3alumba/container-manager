@@ -1,0 +1,17 @@
+{
+  "mode": "controller",
+  "database": "/var/lib/pp-ubuntu-controller/state.sqlite",
+  "bind": "127.0.0.1:8000",
+  "ca": "/etc/pp-ubuntu/ca.crt",
+  "cert": "/etc/pp-ubuntu/controller.crt",
+  "key": "/etc/pp-ubuntu/controller.key",
+  "node_address": "10.200.73.2:9443",
+  "node_identity": "gamma-agent",
+  "relay_address": "10.200.73.1:9444",
+  "relay_identity": "alpha-relay",
+  "domain_suffix": "hosting.i3alumba.ru",
+  "public_port_ranges": { "tcp": [[3000, 50000]], "udp": [[3000, 50000]] },
+  "pool_cpu": 4,
+  "pool_memory_gb": 16,
+  "reserved_ports": [2377, 7946]
+}
