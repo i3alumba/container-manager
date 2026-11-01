@@ -3,6 +3,8 @@
 import ipaddress
 import re
 import threading
+import time
+from urllib.parse import urlencode
 
 from .errors import Failure
 
@@ -19,6 +21,9 @@ NIC = {
     "security.port_isolation": "true",
 }
 SUBNET = ipaddress.ip_network("10.211.0.0/24")
+MAX_PROJECTS = 256
+MAX_LEASE_SCOPES = 16
+LEASE_DOMAIN_TIMEOUT = 2.0
 
 
 class Allocation:
@@ -36,8 +41,8 @@ class Allocation:
         profile = node.verify_profile()
         name = owned_name(resource)
         instance = node.query(f"/1.0/instances/{name}?project={PROJECT}")
-        network = node.query(f"/1.0/networks/{NETWORK}")
-        leases = node.query(f"/1.0/networks/{NETWORK}/leases")
+        network = node.query(f"/1.0/networks/{NETWORK}?project=default")
+        projects, leases = self.lease_domain()
         claims = node.query("/1.0/instances?all-projects=true&recursion=1")
         if (
             instance.get("name") != name
@@ -90,7 +95,11 @@ class Allocation:
                 or local not in (None, NIC)
             ):
                 raise Failure("address_pin_requires_running_dynamic_guest", 409)
-            matches = [lease for lease in leases if lease.get("hwaddr") == mac]
+            matches = [
+                lease
+                for project, lease in leases
+                if project == PROJECT and lease["hwaddr"] == mac
+            ]
             if len(matches) != 1 or matches[0].get("type") != "dynamic":
                 raise Failure("address_lease_ambiguous", 409)
             address = matches[0]["address"]
@@ -106,22 +115,30 @@ class Allocation:
             }
         ):
             raise Failure("address_binding_mismatch", 409)
-        for lease in leases:
-            if lease.get("address") == address or lease.get("hwaddr") == mac:
+        for project, lease in leases:
+            if lease["address"] == address or lease["hwaddr"] == mac:
                 if (
-                    lease.get("address") != address
+                    project != PROJECT
+                    or lease.get("address") != address
                     or lease.get("hwaddr") != mac
                     or lease.get("type") not in {"dynamic", "static"}
                 ):
                     raise Failure("address_lease_ambiguous", 409)
-        if len([lease for lease in leases if lease.get("address") == address]) > 1:
+        if len([lease for _, lease in leases if lease["address"] == address]) > 1:
             raise Failure("address_lease_ambiguous", 409)
         own_claims = 0
         for claim in claims:
+            claim_project = claim.get("project")
+            if not isinstance(claim_project, str) or claim_project not in projects:
+                raise Failure("address_claim_ambiguous", 409)
             for device_name, device in claim["expanded_devices"].items():
                 if device.get("type") != "nic":
                     continue
-                if device.get("network") != NETWORK and device.get("parent") != NETWORK:
+                shared_network = device.get("network") == NETWORK and (
+                    claim_project == "default" or projects[claim_project] == "false"
+                )
+                # A direct host-bridge parent is not a project-isolated network.
+                if not shared_network and device.get("parent") != NETWORK:
                     continue
                 claim_mac = claim.get("expanded_config", {}).get(
                     f"volatile.{device_name}.hwaddr"
@@ -160,6 +177,95 @@ class Allocation:
             "address": address,
             "version": 1,
         }, instance["status"].lower()
+
+    def lease_domain(self) -> tuple[dict[str, str], list[tuple[str, dict]]]:
+        """Inspect the entire shared allocation domain, never a partial union."""
+        deadline = time.monotonic() + LEASE_DOMAIN_TIMEOUT
+
+        def remaining():
+            budget = deadline - time.monotonic()
+            if budget <= 0:
+                raise Failure("address_lease_domain_timeout")
+            return min(5, budget)
+
+        def query(uri):
+            result = self.node.query(uri, timeout=remaining())
+            remaining()  # A late successful reply is not an in-budget snapshot.
+            return result
+
+        inventory = query("/1.0/projects?recursion=1")
+        if not isinstance(inventory, list) or len(inventory) > MAX_PROJECTS:
+            raise Failure("address_lease_domain_unavailable")
+        projects: dict[str, str] = {}
+        for project in inventory:
+            remaining()
+            if not isinstance(project, dict):
+                raise Failure("address_lease_domain_unavailable")
+            name, config = project.get("name"), project.get("config")
+            if (
+                not isinstance(name, str)
+                or not name
+                or name.strip() != name
+                or not name.isprintable()
+                or name in projects
+                or not isinstance(config, dict)
+                or config.get("features.networks") not in ("true", "false")
+            ):
+                raise Failure("address_lease_domain_unavailable")
+            projects[name] = config["features.networks"]
+        if "default" not in projects or projects.get(PROJECT) != "false":
+            raise Failure("address_lease_domain_unavailable")
+        scopes = sorted(
+            name
+            for name, isolated in projects.items()
+            if name == "default" or isolated == "false"
+        )
+        if len(scopes) > MAX_LEASE_SCOPES:
+            raise Failure("address_lease_domain_unavailable")
+        leases: list[tuple[str, dict]] = []
+        for project in scopes:
+            entries = query(
+                f"/1.0/networks/{NETWORK}/leases?" + urlencode({"project": project})
+            )
+            if not isinstance(entries, list):
+                raise Failure("address_lease_domain_unavailable")
+            for lease in entries:
+                remaining()
+                if not isinstance(lease, dict):
+                    raise Failure("address_lease_domain_unavailable")
+                address, mac, kind = (
+                    lease.get("address"),
+                    lease.get("hwaddr"),
+                    lease.get("type"),
+                )
+                try:
+                    ip = ipaddress.IPv4Address(address)
+                except (ValueError, TypeError):
+                    raise Failure("address_lease_domain_unavailable") from None
+                if (
+                    not isinstance(address, str)
+                    or str(ip) != address
+                    or not isinstance(mac, str)
+                ):
+                    raise Failure("address_lease_domain_unavailable")
+                if kind == "gateway":
+                    valid = address == "10.211.0.1" and mac == ""
+                else:
+                    valid = (
+                        kind in ("dynamic", "static")
+                        and ip in SUBNET
+                        and address not in ("10.211.0.0", "10.211.0.1", "10.211.0.255")
+                        and re.fullmatch(
+                            r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}", mac, re.IGNORECASE
+                        )
+                        and not int(mac[:2], 16) & 1
+                        and mac.lower() != "00:00:00:00:00:00"
+                    )
+                if not valid:
+                    raise Failure("address_lease_domain_unavailable")
+                leases.append((project, {**lease, "hwaddr": mac.lower()}))
+        remaining()
+        return projects, leases
 
     @staticmethod
     def valid_claim_address(value):
