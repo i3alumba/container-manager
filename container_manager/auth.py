@@ -29,6 +29,13 @@ class Auth:
             if response.status_code != 200:
                 raise Failure("auth_unavailable")
             user = response.json()
+            # Auth's self-filtered DRF /api/user/ route returns a list, not
+            # a detail object. Never select one identity out of an ambiguous
+            # response; malformed/empty/multiple-user lists fail closed.
+            if isinstance(user, list):
+                if len(user) != 1:
+                    raise Failure("auth_unavailable")
+                user = user[0]
             if not isinstance(user, dict):
                 raise Failure("auth_unavailable")
             if user.get("is_active") is not True or user.get("is_staff") is not True:

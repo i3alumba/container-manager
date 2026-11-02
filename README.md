@@ -128,8 +128,10 @@ cryptographically zeroized; disable core dumps and keep tracing/body capture off
 All routes, including list/capabilities/check, require an explicit
 `Authorization: Bearer ...` header. Cookies alone do not authorize. Every request
 calls `http://auth:8000/api/user/`, with 1s connect / 3s IO timeouts, environment
-proxies and redirects disabled. `is_active is True` and `is_staff is True` are both
-required; missing/string/numeric flags fail. There is no positive grant cache.
+proxies and redirects disabled. Auth's self-filtered `/api/user/` list must contain
+exactly one object; empty/multiple/malformed lists fail closed. A detail object
+remains compatible. `is_active is True` and `is_staff is True` from the live
+read-only profile fields are both required; missing/string/numeric flags fail. There is no positive grant cache.
 401 unauthenticated, 403 ineligible, 409 conflict, 422 invalid input, 503 unavailable
 Auth/host inspection. Generic errors contain only fixed `detail.code/message`.
 Mutations audit actor/action/resource/result, never request bodies/tokens/passwords.
