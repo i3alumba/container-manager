@@ -16,7 +16,7 @@ def client(controller, response=None):
         assert str(request.url) == "http://auth:8000/api/user/"
         assert request.headers["authorization"] == "Bearer token"
         return response or httpx.Response(
-            200, json={"id": 1, "is_active": True, "is_staff": True}
+            200, json=[{"id": 1, "is_active": True, "is_staff": True}]
         )
 
     return TestClient(
@@ -51,6 +51,58 @@ def test_auth_outage_redirects_denied(controller, code):
     api = client(
         controller, httpx.Response(code, headers={"Location": "http://evil.invalid"})
     )
+    assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 503
+
+
+@pytest.mark.parametrize(
+    "payload", [[], [None], [True], [[]], [1], ["admin"], [{}, {}]]
+)
+def test_ambiguous_or_malformed_user_list_fails_closed(controller, payload):
+    api = client(controller, httpx.Response(200, json=payload))
+    assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 503
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"is_active": True},
+        {"is_staff": True},
+        {"is_active": True, "is_staff": "true"},
+        {"is_active": True, "is_staff": 1},
+        {"is_active": "true", "is_staff": True},
+        {"is_active": False, "is_staff": True},
+        {"is_active": True, "is_staff": False},
+        {"is_active": True, "is_staff": None},
+    ],
+)
+def test_real_list_contract_still_requires_exact_live_boolean_flags(controller, fields):
+    api = client(controller, httpx.Response(200, json=[{"id": 1, **fields}]))
+    assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 403
+
+
+def test_real_profile_list_revocation_with_same_bearer_has_no_positive_cache(
+    controller,
+):
+    calls = []
+
+    def handler(request):
+        assert request.headers["authorization"] == "Bearer token"
+        calls.append(1)
+        return httpx.Response(
+            200,
+            json=[{"id": 1, "is_active": True, "is_staff": len(calls) == 1}],
+        )
+
+    api = TestClient(app_for(controller, Auth(httpx.MockTransport(handler))))
+    assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 200
+    assert api.get("/api/containers/", headers=AUTH).status_code == 403
+    assert len(calls) == 2
+
+
+def test_multiple_users_never_selects_an_administrator(controller):
+    user = {"id": 1, "is_active": True, "is_staff": True}
+    api = client(controller, httpx.Response(200, json=[user, {**user, "id": 2}]))
     assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 503
 
 
