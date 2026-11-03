@@ -60,8 +60,11 @@ uv run container-manager --help
 
 - Не сохраняй/не публикуй passwords, JWT, cookies, private keys, `.env`, kubeconfig,
   рабочие SQLite/backup/volume данные; не отражай их в ошибках, argv и логах.
-- На каждом HTTP-запросе нужны live active + точный boolean staff и явный bearer;
-  cookie-only и Auth outage закрываются отказом, без положительного grant cache.
+- На каждом HTTP-запросе нужны live `is_active is True` + точный boolean
+  `services.hosting is True` и явный bearer. Это согласованный per-service
+  Hosting-admin contract; `is_staff`/`is_superuser` не обходят отсутствующий или
+  отозванный grant. До readiness Auth сохраняет прежнее staff-derived право.
+  Cookie-only и Auth outage закрываются отказом, без положительного grant cache.
 - Incus socket и node agent — host-root trust boundary. Не выставляй Incus API
   публично и не монтируй socket в контроллер.
 - Сохраняй unprivileged isolated UID/GID, отсутствие nesting/VM, managed-only

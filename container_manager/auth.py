@@ -38,7 +38,14 @@ class Auth:
                 user = user[0]
             if not isinstance(user, dict):
                 raise Failure("auth_unavailable")
-            if user.get("is_active") is not True or user.get("is_staff") is not True:
+            services = user.get("services")
+            # Hosting has a service-specific administrator grant. Never infer
+            # it from staff/superuser, a portal tile or stale JWT role claims.
+            if (
+                user.get("is_active") is not True
+                or not isinstance(services, dict)
+                or services.get("hosting") is not True
+            ):
                 raise Failure("administrator_required", 403)
             actor = user.get("id")
             if not isinstance(actor, (str, int)) or isinstance(actor, bool):

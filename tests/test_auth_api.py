@@ -16,7 +16,15 @@ def client(controller, response=None):
         assert str(request.url) == "http://auth:8000/api/user/"
         assert request.headers["authorization"] == "Bearer token"
         return response or httpx.Response(
-            200, json=[{"id": 1, "is_active": True, "is_staff": True}]
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "is_active": True,
+                    "is_staff": True,
+                    "services": {"hosting": True},
+                }
+            ],
         )
 
     return TestClient(
@@ -76,7 +84,9 @@ def test_ambiguous_or_malformed_user_list_fails_closed(controller, payload):
         {"is_active": True, "is_staff": None},
     ],
 )
-def test_real_list_contract_still_requires_exact_live_boolean_flags(controller, fields):
+def test_missing_hosting_grant_fails_closed_even_with_legacy_staff_flags(
+    controller, fields
+):
     api = client(controller, httpx.Response(200, json=[{"id": 1, **fields}]))
     assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 403
 
@@ -91,7 +101,14 @@ def test_real_profile_list_revocation_with_same_bearer_has_no_positive_cache(
         calls.append(1)
         return httpx.Response(
             200,
-            json=[{"id": 1, "is_active": True, "is_staff": len(calls) == 1}],
+            json=[
+                {
+                    "id": 1,
+                    "is_active": True,
+                    "is_staff": True,
+                    "services": {"hosting": len(calls) == 1},
+                }
+            ],
         )
 
     api = TestClient(app_for(controller, Auth(httpx.MockTransport(handler))))
@@ -106,6 +123,84 @@ def test_multiple_users_never_selects_an_administrator(controller):
     assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 503
 
 
+@pytest.mark.parametrize("staff", [False, True])
+def test_explicit_hosting_grant_not_staff_is_the_authority(controller, staff):
+    api = client(
+        controller,
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "is_active": True,
+                    "is_staff": staff,
+                    "services": {"hosting": True},
+                }
+            ],
+        ),
+    )
+    assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 200
+
+
+@pytest.mark.parametrize("grant", [None, False, "true", 1, {"enabled": True}])
+def test_staff_or_superuser_never_bypasses_missing_exact_hosting_grant(
+    controller, grant
+):
+    api = client(
+        controller,
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "is_active": True,
+                    "is_staff": True,
+                    "is_superuser": True,
+                    "services": {"hosting": grant},
+                }
+            ],
+        ),
+    )
+    assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 403
+
+
+@pytest.mark.parametrize("active", [None, False, "true", 1, {}, []])
+def test_hosting_grant_still_requires_exact_active_boolean(controller, active):
+    api = client(
+        controller,
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "is_active": active,
+                    "services": {"hosting": True},
+                }
+            ],
+        ),
+    )
+    assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 403
+
+
+@pytest.mark.parametrize("services", [None, True, [], "hosting", {}])
+def test_malformed_service_map_never_falls_back_to_staff(controller, services):
+    api = client(
+        controller,
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "is_active": True,
+                    "is_staff": True,
+                    "services": services,
+                }
+            ],
+        ),
+    )
+    assert api.get("/api/containers/capabilities", headers=AUTH).status_code == 403
+
+
 def test_cookie_only_denied(controller):
     api = client(controller)
     api.cookies.set("access_token", "token")
@@ -118,7 +213,13 @@ def test_no_positive_cache(controller):
     def handler(request):
         calls.append(1)
         return httpx.Response(
-            200, json={"id": 1, "is_staff": len(calls) == 1, "is_active": True}
+            200,
+            json={
+                "id": 1,
+                "is_staff": True,
+                "is_active": True,
+                "services": {"hosting": len(calls) == 1},
+            },
         )
 
     api = TestClient(app_for(controller, Auth(httpx.MockTransport(handler))))
