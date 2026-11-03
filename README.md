@@ -130,8 +130,19 @@ All routes, including list/capabilities/check, require an explicit
 calls `http://auth:8000/api/user/`, with 1s connect / 3s IO timeouts, environment
 proxies and redirects disabled. Auth's self-filtered `/api/user/` list must contain
 exactly one object; empty/multiple/malformed lists fail closed. A detail object
-remains compatible. `is_active is True` and `is_staff is True` from the live
-read-only profile fields are both required; missing/string/numeric flags fail. There is no positive grant cache.
+remains compatible. `is_active is True` and the exact boolean
+`services.hosting is True` from the live read-only profile are both required;
+missing/string/numeric/object grants fail. Neither `is_staff` nor `is_superuser`
+is a fallback or override. A specifically authorized non-staff Hosting
+administrator can use this service without gaining central user-management
+rights. There is no positive grant cache.
+
+This prepared consumer contract must be published/deployed and verified **before**
+Auth enables `USER_ADMIN_HOSTING_GRANTS_READY`. Until that default-off switch is
+enabled, Auth computes `services.hosting` from its original active/staff rule,
+so deploying the consumer first preserves legacy admission. Independent grant
+editing remains unavailable until coordinated release; no production change is
+performed here.
 401 unauthenticated, 403 ineligible, 409 conflict, 422 invalid input, 503 unavailable
 Auth/host inspection. Generic errors contain only fixed `detail.code/message`.
 Mutations audit actor/action/resource/result, never request bodies/tokens/passwords.

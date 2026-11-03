@@ -55,7 +55,13 @@ def test_stalled_agents_cannot_block_listener_or_spawn_overlapping_reconciliatio
     auth = Auth(
         httpx.MockTransport(
             lambda request: httpx.Response(
-                200, json={"id": 1, "is_active": True, "is_staff": True}
+                200,
+                json={
+                    "id": 1,
+                    "is_active": True,
+                    "is_staff": True,
+                    "services": {"hosting": True},
+                },
             )
         )
     )
