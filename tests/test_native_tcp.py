@@ -115,6 +115,13 @@ def test_native_tcp_both_fin_directions_delayed_large_backpressure(
             sender.join(5)
             assert not sender.is_alive()
             assert result == [payload]
+            binding = node.native.bindings[spec["id"]]
+            with binding.clients_lock:
+                assert len(binding.clients) == 2
+                assert all(
+                    stream.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 1
+                    for stream in binding.clients
+                )
             time.sleep(0.03)
             second.sendall(b"response after FIN")
             second.shutdown(socket.SHUT_WR)

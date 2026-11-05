@@ -2,6 +2,7 @@ import socket
 import threading
 import time
 from dataclasses import replace
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -122,6 +123,72 @@ def test_copy_tcp_half_close_and_bounded_idle():
     assert time.monotonic() - start < 1
 
 
+@pytest.mark.parametrize("family", [socket.AF_INET, socket.AF_INET6])
+def test_copy_tcp_enables_nodelay_on_both_tcp_streams(family):
+    address = "127.0.0.1" if family == socket.AF_INET else "::1"
+    with socket.socket(family) as listener:
+        try:
+            listener.bind((address, 0))
+        except OSError:
+            if family == socket.AF_INET6:
+                pytest.skip("IPv6 loopback is unavailable")
+            raise
+        listener.listen()
+        listener.settimeout(2)
+        with (
+            socket.create_connection(listener.getsockname()[:2], timeout=2) as client,
+            listener.accept()[0] as relay_left,
+            socket.create_connection(
+                listener.getsockname()[:2], timeout=2
+            ) as relay_right,
+            listener.accept()[0] as server,
+        ):
+            assert relay_left.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 0
+            assert relay_right.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 0
+            worker = threading.Thread(
+                target=copy_tcp, args=(relay_left, relay_right, 1)
+            )
+            worker.start()
+            try:
+                client.settimeout(2)
+                server.settimeout(2)
+                client.sendall(b"request")
+                assert server.recv(99) == b"request"
+                assert (
+                    relay_left.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 1
+                )
+                assert (
+                    relay_right.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 1
+                )
+                client.shutdown(socket.SHUT_WR)
+                assert server.recv(99) == b""
+                server.sendall(b"response after request FIN")
+                server.shutdown(socket.SHUT_WR)
+                response = bytearray()
+                while block := client.recv(99):
+                    response.extend(block)
+                assert response == b"response after request FIN"
+            finally:
+                client.close()
+                server.close()
+                worker.join(3)
+            assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("failing_stream", [0, 1])
+def test_copy_tcp_nodelay_failure_closes_both_streams(failing_stream):
+    streams = [Mock(spec=socket.socket), Mock(spec=socket.socket)]
+    for stream in streams:
+        stream.family = socket.AF_INET
+    streams[failing_stream].setsockopt.side_effect = OSError("socket closed")
+    copy_tcp(*streams)
+    for stream in streams:
+        stream.close.assert_called_once_with()
+    streams[failing_stream].setsockopt.assert_called_once_with(
+        socket.IPPROTO_TCP, socket.TCP_NODELAY, 1
+    )
+
+
 def test_real_tcp_relay_fixed_target_and_removal_closes_connections(config, spec):
     spec["public_port"] = available_port()
     relay = Relay(config, Store(config.database), FreeInspector())
@@ -142,6 +209,14 @@ def test_real_tcp_relay_fixed_target_and_removal_closes_connections(config, spec
                     assert peer.recv(99) == b"hello"
                     peer.sendall(b"world")
                     assert client.recv(99) == b"world"
+                    binding = relay.bindings[spec["id"]]
+                    with binding.clients_lock:
+                        assert len(binding.clients) == 2
+                        assert all(
+                            stream.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
+                            == 1
+                            for stream in binding.clients
+                        )
                     relay.remove(spec)
                     assert client.recv(99) == b""
         finally:
