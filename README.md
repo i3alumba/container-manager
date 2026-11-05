@@ -117,11 +117,16 @@ cryptographically zeroized; disable core dumps and keep tracing/body capture off
   subordinate ID ranges/kernel support. Minimal Ubuntu plus openssh-server and CA
   certificates, not Java/games. Guest root SSH password login is intentional;
   effective sshd settings and syntax are checked by constant bootstrap commands.
-- CPU integer 1..4, never bool; decimal memory >0 and <=16 GB, up to three decimal
-  places (GB = 1,000,000,000 bytes). Aggregate default is **4 CPU / 16 GB**, including
-  stopped/error guests. Operator can explicitly change the bounded pool budget.
-  Existing k3s workloads retain priority. No storage quota or automatic low-space
-  admission protection is implied: separately monitor NVMe capacity/inodes.
+- CPU is a positive integer (never bool); memory is positive finite decimal GB,
+  up to three decimal places (GB = 1,000,000,000 bytes). There is **no fixed 4 CPU /
+  16 GB per-container ceiling and no default aggregate quota**. UInt32 CPU/UInt64
+  byte representability and the node's real physical CPU/RAM inventory still bound
+  an individual request. Optional operator `pool_cpu`/`pool_memory_gb` quotas are
+  supported only when explicitly configured; `null`/omitted means no quota.
+  Aggregate overcommit is therefore possible: limits are not reserved RAM or a
+  guarantee of k3s priority. Monitor host memory/CPU pressure and reserve capacity
+  through operator policy when required. No disk quota/low-space protection is
+  implied; separately monitor NVMe capacity/inodes.
 
 ## Browser API v1
 
@@ -155,8 +160,12 @@ Base: same-origin `/api/containers/`. Routes are slash-exact; no redirect is nee
 {
   "administrator": true,
   "node": "gamma",
-  "max_cpu": 4,
-  "max_memory_gb": 16,
+  "max_cpu": null,
+  "max_memory_gb": null,
+  "resources_editing_enabled": true,
+  "gpu_shared": true,
+  "gpus": [],
+  "host_resources": { "cpu": 64, "memory_gb": 128 },
   "domain_suffix": "hosting.i3alumba.ru",
   "image": "Ubuntu 24.04 LTS",
   "disk_quota": false,
@@ -164,12 +173,17 @@ Base: same-origin `/api/containers/`. Routes are slash-exact; no redirect is nee
   "root_persistence": "full",
   "external_ingress_ready": true,
   "public_port_ranges": { "tcp": [[3000, 50000]], "udp": [[3000, 50000]] },
-  "aggregate_budget": { "cpu": 4, "memory_gb": 16 }
+  "aggregate_budget": { "cpu": null, "memory_gb": null }
 }
 ```
 
 `GET /` returns `{instances:[Instance,...]}`. Each Instance has
-`{id,name,domain,node,status,cpu,memory_gb,ports,created_at,updated_at,error}`.
+`{id,name,domain,node,status,cpu,memory_gb,gpu_ids,resource_version,ports,created_at,updated_at,error}`.
+Legacy rows gain additive metadata defaults `gpu_ids=[]`, `resource_version=0`;
+no guest, root, home or mapping is recreated. The hardware values above are an
+illustration, not a claim about the production host. Missing/old/unavailable node
+RPC capabilities advertise editing disabled and no GPUs; unsupported mutations
+fail closed until the matching native agent is published/installed.
 IDs are canonical lowercase UUIDs, node is `gamma`, status is
 `creating|running|stopped|error`; error is null or a fixed sanitized code. Port:
 `{id,protocol,public_port,target_port,status,reachability}`, status
@@ -203,6 +217,13 @@ IDs are canonical lowercase UUIDs, node is `gamma`, status is
   HTTP503 with this same check-result shape; invalid/reserved policy is never free.
   This endpoint allocates nothing.
 - `POST {id}/start`, `POST {id}/stop` -> **updated Instance**, never delete storage.
+- `POST {id}/resources`:
+  `{cpu,memory_gb,gpu_ids,expected_version,allow_restart}` -> updated Instance.
+  `expected_version` is the opening `resource_version`; stale revisions return409.
+  Running GPU-set changes or RAM decreases require explicit `allow_restart:true`;
+  CPU/RAM increases are applied live. A stopped guest stays stopped. Restarts use
+  the normal power path, closing TCP streams and preserving pinned addresses,
+  port reservations, SSH keys, full root and `/home`. No force-stop or recreation.
 - `POST {id}/password`: `{root_password}` -> exactly `{changed:true}`.
 - `POST {id}/ports`: PortSpec -> updated Instance after checked activation.
 - `DELETE {id}/ports/{port_id}` -> updated Instance; matching owned mapping only.
@@ -214,6 +235,44 @@ hash. Never reuse a key for a different intended operation. A pending create key
 job; other pending/error keys return409 requiring reconciliation. Retrying cannot
 silently recreate a guest.
 Unknown JSON fields are rejected, including image/profile/config/host path fields.
+
+## CPU/RAM edits and shared physical GPUs (new source, not activated)
+
+Create also accepts `gpu_ids:[canonical PCI address,...]`, default `[]`; GPU devices
+are attached before the first guest start. Capabilities list only live cards in
+node operator `gpu_allowed_pci`, e.g. `0000:01:00.0` (example, not a production
+selection), and only while the fixed restricted project explicitly permits GPU
+devices. Unknown IDs, duplicates, host paths, arbitrary device/config/profile
+fields and unverified inventory are refused. One listed card may be shared by
+multiple managed containers; there is no exclusive lease or VRAM/compute quota.
+Sharing exposes the host GPU driver and allows GPU contention/OOM across guests;
+it is not strong workload isolation. Compatible host drivers and guest userspace
+libraries are operator/guest prerequisites, never installed by these API actions.
+
+The application **never changes project restrictions**. Before a separately
+approved rollout, an operator must review existing Incus project CPU/RAM limits
+(the old 4/16 baseline remains effective until changed), allow only the reviewed
+GPU device class, configure the specific physical PCI allowlist, and verify
+unprivileged isolated UID/GID permissions. Keep VM/privilege/nesting/unmanaged
+host-path/PCI/USB restrictions, fixed profile, root/home and network policy intact.
+An empty allowlist or denied project GPU policy yields no selectable GPUs.
+
+Upgrade the native node agent first, then the matching controller and Dashboard;
+new RPCs are additive but an old node cannot safely implement resource editing.
+Every edit verifies stored ownership against actual secure instance/profile,
+CPU/RAM, home, NIC/pin and exact managed GPU/proxy devices before mutation. A
+node intent is committed before stop/config operations. Readback and original
+running/stopped state are required before ownership/HTTP metadata acknowledgement.
+Controller revisions and actor-bound idempotency prevent stale/replayed updates.
+A timeout, crash or partial write preserves error ownership and any increased
+resource reservation: never blindly retry, adopt foreign devices, reset a row,
+restart an uncertain guest or restore an old database to make the UI green.
+Reconciliation is a separately backed-up operator action, not a public force API.
+Queued bootstrap jobs remain bounded independently of resource quotas.
+
+Local mocked tests do not prove live GPU/CUDA/render access, driver safety,
+resource hotplug, reboot, persistent data or public mapping preservation. These
+require separately authorized native acceptance with reviewed versions/backups.
 
 ## Upstream ingress ownership (required before publication)
 
@@ -388,9 +447,12 @@ make a port appear free. UDP ownership and readiness remain unchanged.
   IPv4/IPv6/MAC filtering and port isolation. The app uses no network/root-device
   overrides except the validated native TCP static IPv4 pin above; review
   operator drift before admissions. Shared default-project image
-  cache is supported (`features.images=false`). Project CPU/memory limits should
-  independently enforce the 4 CPU / 16GB baseline; VM limit0; managed-only disks/NICs,
-  isolated privilege, blocked nesting and proxy permission.
+  cache is supported (`features.images=false`). Project CPU/memory limits are
+  operator-owned: review/remove the old 4 CPU /16GB project ceiling only in the
+  authorized resource-policy rollout. Retain VM limit0, managed-only disks/NICs,
+  isolated privilege, blocked nesting and scoped proxy permission. GPU access
+  additionally requires a reviewed GPU-class policy and node PCI allowlist; no
+  automatic project-policy broadening or driver/package installation occurs.
 - No public Incus endpoint. WireGuard routing controller->gamma/alpha private gRPC
   and alpha->gamma published ports; gamma proxy ingress restricted to alpha's
   WireGuard peer; bridge ACLs isolate guest access to host/k3s/private networks.
@@ -489,7 +551,9 @@ host-reserved infrastructure ports consistently to all three configs.
 
 All modes require `database`, `bind`, `ca`, `cert`, `key`. Controller uses
 `node_address/identity`, `relay_address/identity`, `domain_suffix`, `public_port_ranges`, and aggregate
-`pool_cpu/pool_memory_gb`. Node additionally requires `wireguard_ip`, `gamma_ip`,
+optional `pool_cpu/pool_memory_gb` (`null`/omitted: no aggregate quota). Node's
+`gpu_allowed_pci` defaults to `[]` and selects only operator-approved physical GPU
+PCI addresses. Node additionally requires `wireguard_ip`, `gamma_ip`,
 `host_addresses`, `image_fingerprint`. Relay requires `wireguard_ip`, `public_ip`,
 `gamma_ip`, `host_addresses`; `inspection_sudo:true` enables the exact read-only
 sudo argv. Native agent gRPC binds must equal their configured private WireGuard

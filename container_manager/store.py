@@ -23,6 +23,15 @@ class Store:
                   id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, domain TEXT NOT NULL,
                   cpu INTEGER NOT NULL, memory_gb REAL NOT NULL, status TEXT NOT NULL,
                   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, error TEXT);
+                CREATE TABLE IF NOT EXISTS resource_settings_v1 (
+                  instance_id TEXT PRIMARY KEY, gpu_ids TEXT NOT NULL,
+                  version INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS resource_changes_v1 (
+                  instance_id TEXT PRIMARY KEY, cpu INTEGER NOT NULL,
+                  memory_gb REAL NOT NULL, gpu_ids TEXT NOT NULL, state TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS node_resource_changes_v1 (
+                  instance_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL,
+                  desired TEXT NOT NULL, state TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ports (
                   id TEXT PRIMARY KEY, instance_id TEXT NOT NULL, protocol TEXT NOT NULL,
                   public_port INTEGER NOT NULL, target_port INTEGER NOT NULL,
@@ -69,6 +78,12 @@ class Store:
                 raise Failure("not_found", 404)
             result = dict(row)
             result["node"] = "gamma"
+            settings = db.execute(
+                "SELECT gpu_ids,version FROM resource_settings_v1 WHERE instance_id=?",
+                (resource,),
+            ).fetchone()
+            result["gpu_ids"] = json.loads(settings[0]) if settings else []
+            result["resource_version"] = settings[1] if settings else 0
             result["ports"] = [
                 dict(p)
                 for p in db.execute(
@@ -110,6 +125,7 @@ class Store:
                 "target_port",
                 "cpu",
                 "memory_bytes",
+                "gpu_ids",
             }
         }
         with self.transaction() as db:
@@ -208,6 +224,72 @@ class Store:
                 raise Failure("ownership_conflict", 409)
             db.execute("DELETE FROM native_tcp_v1 WHERE id=?", (spec["id"],))
             db.execute("DELETE FROM ownership WHERE id=?", (spec["id"],))
+
+    @staticmethod
+    def reserved_resources(db):
+        # An ambiguous increase keeps its reservation until explicit reconciliation.
+        return db.execute(
+            "SELECT COALESCE(SUM(MAX(i.cpu,COALESCE(c.cpu,i.cpu))),0),"
+            "COALESCE(SUM(MAX(i.memory_gb,COALESCE(c.memory_gb,i.memory_gb))),0) "
+            "FROM instances i LEFT JOIN resource_changes_v1 c ON c.instance_id=i.id"
+        ).fetchone()
+
+    def begin_resource_intent(self, resource, operation_id, desired):
+        with self.transaction() as db:
+            row = db.execute(
+                "SELECT state FROM node_resource_changes_v1 WHERE instance_id=?",
+                (resource,),
+            ).fetchone()
+            if row and row[0] != "done":
+                raise Failure("resource_change_requires_reconciliation", 409)
+            db.execute(
+                "INSERT INTO node_resource_changes_v1 VALUES(?,?,?,'pending') "
+                "ON CONFLICT(instance_id) DO UPDATE SET operation_id=excluded.operation_id,desired=excluded.desired,state='pending'",
+                (resource, operation_id, json.dumps(desired, sort_keys=True)),
+            )
+
+    def commit_resource_spec(self, resource, before, after, operation_id):
+        with self.transaction() as db:
+            old = db.execute(
+                "SELECT spec,state FROM ownership WHERE id=?", (resource,)
+            ).fetchone()
+            intent = db.execute(
+                "SELECT operation_id,state FROM node_resource_changes_v1 WHERE instance_id=?",
+                (resource,),
+            ).fetchone()
+            if (
+                not old
+                or old[0] != json.dumps(before, sort_keys=True)
+                or old[1] != "ready"
+                or not intent
+                or tuple(intent) != (operation_id, "pending")
+            ):
+                raise Failure("resource_change_requires_reconciliation", 409)
+            db.execute(
+                "UPDATE ownership SET spec=? WHERE id=?",
+                (json.dumps(after, sort_keys=True), resource),
+            )
+            db.execute(
+                "UPDATE node_resource_changes_v1 SET state='done' WHERE instance_id=?",
+                (resource,),
+            )
+
+    def resource_intent_error(self, resource):
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE node_resource_changes_v1 SET state='error' WHERE instance_id=?",
+                (resource,),
+            )
+            db.execute("UPDATE ownership SET state='error' WHERE id=?", (resource,))
+
+    def recover_resource_intents(self):
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE ownership SET state='error' WHERE id IN (SELECT instance_id FROM node_resource_changes_v1 WHERE state='pending')"
+            )
+            db.execute(
+                "UPDATE node_resource_changes_v1 SET state='error' WHERE state='pending'"
+            )
 
     def recover_controller(self):
         with self.transaction() as db:

@@ -7,6 +7,7 @@ from .models import Port, canonical_id, validate_port
 from .inspection import listener_ready
 from .allocation import Allocation
 from .native_tcp import NativeTCP
+from .resource_control import ResourceControl, validate_limits
 
 PROJECT = "pp-ubuntu"
 POOL = "pp-ubuntu-ssd"
@@ -44,6 +45,8 @@ class Incus:
         self.ready = ready
         self.allocation = Allocation(self)
         self.native = NativeTCP(self)
+        self.resource_control = ResourceControl(self)
+        store.recover_resource_intents()
         for row in store.ownership():
             if row["state"] == "creating":
                 store.own(row["id"], json.loads(row["spec"]), "error")
@@ -282,20 +285,25 @@ class Incus:
         if not row or row["state"] != "ready":
             raise Failure("instance_requires_reconciliation", 409)
 
-    def create(self, resource: str, cpu: int, memory_bytes: int, password: str):
+    def resources(self):
+        return self.resource_control.info()
+
+    def update_resources(self, *args):
+        return self.resource_control.update(*args)
+
+    def create(
+        self, resource: str, cpu: int, memory_bytes: int, password: str, gpu_ids=None
+    ):
         name = owned_name(resource)
-        if (
-            type(cpu) is not int
-            or not 1 <= cpu <= 4
-            or type(memory_bytes) is not int
-            or not 1 <= memory_bytes <= 16_000_000_000
-        ):
-            raise Failure("invalid_limits", 422)
+        gpu_ids = [] if gpu_ids is None else gpu_ids
+        validate_limits(cpu, memory_bytes, gpu_ids)
         # Validate transient password on BOTH sides of the private trust boundary.
         from .models import Password
 
         Password(root_password=password)
         spec = {"id": resource, "cpu": cpu, "memory_bytes": memory_bytes}
+        if gpu_ids:
+            spec["gpu_ids"] = sorted(gpu_ids)
         with self.instance_lock(resource):
             old = next((r for r in self.store.ownership() if r["id"] == resource), None)
             if old:
@@ -303,6 +311,7 @@ class Incus:
                     return
                 raise Failure("instance_requires_reconciliation", 409)
             self.verify_profile()
+            self.resource_control.validate(cpu, memory_bytes, gpu_ids)
             self.store.own(resource, spec, "creating")
             try:
                 self.command(
@@ -347,6 +356,8 @@ class Incus:
                         "path=/home",
                     ]
                 )
+                for pci in sorted(gpu_ids):
+                    self.resource_control.add_gpu(name, pci)
                 self.command(["start", name])
                 self.command(
                     [

@@ -66,12 +66,24 @@ class Password(Model):
         return value
 
 
-class Create(Password):
-    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
-    domain: str
-    cpu: Annotated[int, Field(strict=True, ge=1, le=4)]
-    memory_gb: Decimal = Field(gt=0, le=16, max_digits=8, decimal_places=3)
-    ports: list[Port] = Field(default_factory=list, max_length=64)
+GPU_PATTERN = r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$"
+GPUId = Annotated[str, Field(strict=True, pattern=GPU_PATTERN)]
+
+
+class Resources(Model):
+    # Wire/storage representability, not an operator CPU/RAM quota.
+    cpu: Annotated[int, Field(strict=True, ge=1, le=2**32 - 1)]
+    memory_gb: Decimal = Field(
+        gt=0, le=Decimal(2**64 - 1) / 1_000_000_000, decimal_places=3
+    )
+    gpu_ids: list[GPUId] = Field(default_factory=list, max_length=64)
+
+    @field_validator("gpu_ids")
+    @classmethod
+    def gpu_unique(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError("duplicate_gpu")
+        return sorted(value)
 
     @field_validator("memory_gb", mode="before")
     @classmethod
@@ -79,6 +91,17 @@ class Create(Password):
         if isinstance(value, bool):
             raise ValueError("invalid_memory")
         return value
+
+
+class ResourceChange(Resources):
+    expected_version: Annotated[int, Field(strict=True, ge=0, le=2**63 - 1)]
+    allow_restart: Annotated[bool, Field(strict=True)] = False
+
+
+class Create(Password, Resources):
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
+    domain: str
+    ports: list[Port] = Field(default_factory=list, max_length=64)
 
     @field_validator("domain")
     @classmethod

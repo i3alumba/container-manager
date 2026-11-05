@@ -47,6 +47,35 @@ class Service(wire.NodeServicer, wire.RelayServicer):
         except Exception:
             context.abort(grpc.StatusCode.UNAVAILABLE, "agent_operation_failed")
 
+    def Resources(self, request, context):
+        def resources():
+            result = self.backend.resources()
+            return pb.HostResources(
+                cpu=result["cpu"],
+                memory_bytes=result["memory_bytes"],
+                gpus=[pb.GPU(**g) for g in result["gpus"]],
+            )
+
+        return self.invoke(context, resources)
+
+    def UpdateResources(self, request, context):
+        return self.invoke(
+            context,
+            lambda: pb.State(
+                state=self.backend.update_resources(
+                    request.id,
+                    request.cpu,
+                    request.memory_bytes,
+                    list(request.gpu_ids),
+                    request.allow_restart,
+                    request.operation_id,
+                    request.expected_cpu,
+                    request.expected_memory_bytes,
+                    list(request.expected_gpu_ids),
+                )
+            ),
+        )
+
     def InstanceStatus(self, request, context):
         return self.invoke(
             context, lambda: pb.State(state=self.backend.instance_status(request.id))
@@ -81,6 +110,7 @@ class Service(wire.NodeServicer, wire.RelayServicer):
                 request.cpu,
                 request.memory_bytes,
                 request.root_password,
+                *([list(request.gpu_ids)] if request.gpu_ids else []),
             ),
         )
 
@@ -175,12 +205,21 @@ class Remote:
     def call(self, method: str, request):
         try:
             return getattr(self.stub, method)(
-                request, timeout=180 if method == "Create" else 15, wait_for_ready=False
+                request,
+                timeout=180 if method in {"Create", "UpdateResources"} else 15,
+                wait_for_ready=False,
             )
         except grpc.RpcError as error:
             # Peer descriptions are not trusted to be safe for browser responses.
             if error.code() == grpc.StatusCode.ALREADY_EXISTS:
-                raise Failure("host_port_conflict", 409) from None
+                raise Failure(
+                    (
+                        "resources_conflict"
+                        if method == "UpdateResources"
+                        else "host_port_conflict"
+                    ),
+                    409,
+                ) from None
             if error.code() == grpc.StatusCode.NOT_FOUND:
                 raise Failure("host_resource_missing", 409) from None
             if error.code() == grpc.StatusCode.INVALID_ARGUMENT:
@@ -200,11 +239,50 @@ class Remote:
             "reason": "free" if answer.available else "host_port_conflict",
         }
 
-    def create(self, resource, cpu, memory_bytes, password):
+    def resources(self):
+        answer = self.call("Resources", pb.Empty())
+        return {
+            "cpu": answer.cpu,
+            "memory_bytes": answer.memory_bytes,
+            "gpus": [{"id": g.id, "name": g.name} for g in answer.gpus],
+        }
+
+    def update_resources(
+        self,
+        resource,
+        cpu,
+        memory_bytes,
+        gpu_ids,
+        allow_restart,
+        operation_id,
+        expected_cpu,
+        expected_memory_bytes,
+        expected_gpu_ids,
+    ):
+        return self.call(
+            "UpdateResources",
+            pb.ResourceRequest(
+                id=resource,
+                cpu=cpu,
+                memory_bytes=memory_bytes,
+                gpu_ids=gpu_ids,
+                allow_restart=allow_restart,
+                operation_id=operation_id,
+                expected_cpu=expected_cpu,
+                expected_memory_bytes=expected_memory_bytes,
+                expected_gpu_ids=expected_gpu_ids,
+            ),
+        ).state
+
+    def create(self, resource, cpu, memory_bytes, password, gpu_ids=()):
         self.call(
             "Create",
             pb.Instance(
-                id=resource, cpu=cpu, memory_bytes=memory_bytes, root_password=password
+                id=resource,
+                cpu=cpu,
+                memory_bytes=memory_bytes,
+                root_password=password,
+                gpu_ids=gpu_ids,
             ),
         )
 

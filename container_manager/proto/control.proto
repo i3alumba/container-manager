@@ -5,11 +5,26 @@ message Empty {}
 message State { string state = 1; }
 message Port { string id = 1; string protocol = 2; uint32 public_port = 3; uint32 target_port = 4; string instance_id = 5; }
 message Inspection { bool available = 1; string reason = 2; }
-message Instance { string id = 1; uint32 cpu = 2; uint64 memory_bytes = 3; string root_password = 4; }
+message Instance { string id = 1; uint32 cpu = 2; uint64 memory_bytes = 3; string root_password = 4; repeated string gpu_ids = 5; }
+message GPU { string id = 1; string name = 2; }
+message HostResources { uint32 cpu = 1; uint64 memory_bytes = 2; repeated GPU gpus = 3; }
+message ResourceRequest {
+  string id = 1;
+  uint32 cpu = 2;
+  uint64 memory_bytes = 3;
+  repeated string gpu_ids = 4;
+  bool allow_restart = 5;
+  string operation_id = 6;
+  uint32 expected_cpu = 7;
+  uint64 expected_memory_bytes = 8;
+  repeated string expected_gpu_ids = 9;
+}
 message InstanceId { string id = 1; }
 message PowerRequest { string id = 1; bool start = 2; }
 message PasswordRequest { string id = 1; string root_password = 2; }
 service Node {
+  rpc Resources(Empty) returns (HostResources);
+  rpc UpdateResources(ResourceRequest) returns (State);
   rpc InstanceStatus(InstanceId) returns (State);
   rpc PortStatus(Port) returns (State);
   rpc Inspect(Port) returns (Inspection);

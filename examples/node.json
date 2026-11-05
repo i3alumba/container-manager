@@ -10,5 +10,6 @@
   "key": "/etc/pp-ubuntu/gamma.key",
   "controller_cn": "pp-ubuntu-controller",
   "image_fingerprint": "REPLACE_WITH_OPERATOR_VERIFIED_64_HEX_LOCAL_UBUNTU_24_04_FINGERPRINT",
-  "reserved_ports": [2377, 7946]
+  "reserved_ports": [2377, 7946],
+  "gpu_allowed_pci": []
 }
