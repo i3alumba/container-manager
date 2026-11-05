@@ -365,6 +365,13 @@ Especially, a UDP send does **not** establish external reachability. Validate re
 SSH/TCP/UDP externally as an operator after authorized deployment, with bounded
 probe timeouts. Alpha TCP has 3s upstream connect / 120s idle timeout, <=64KiB
 pending per direction, half-close propagation, 128 concurrent connections globally.
+Both the alpha relay and gamma native TCP pump enable `TCP_NODELAY` on accepted
+and upstream sockets before forwarding. This avoids Nagle/delayed-ACK stalls
+between small protocol messages, including chunk-batch markers; buffer bounds,
+timeouts and half-close behavior are unchanged. UDP is unaffected. This applies
+to new streams after a separately authorized upgrade of both native agents;
+a controller-only image update does not update host agents. Coordinate agent
+restarts because they close existing TCP connections.
 UDP has <=256 client associations per mapping / <=1024 globally, 30s client-activity TTL, connected
 fixed upstream sockets and <=65536-byte datagrams; replies cannot refresh idle TTL.
 At most64 mappings per instance. There is no arbitrary broad-range exposure.
