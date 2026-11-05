@@ -6,8 +6,18 @@ import threading
 from uuid import uuid4
 
 from .errors import Failure
-from .models import Check, Create, Port, canonical_id, validate_port
+from .models import (
+    Check,
+    Create,
+    Port,
+    ResourceChange,
+    Resources,
+    canonical_id,
+    validate_port,
+)
 from .store import now
+from decimal import Decimal
+import json
 
 log = logging.getLogger("container_manager.audit")
 
@@ -89,6 +99,58 @@ class Controller:
                                 "UPDATE ports SET status='error' WHERE id=?",
                                 (port["id"],),
                             )
+
+    def host_resources(self):
+        try:
+            info = self.node.resources()
+            cpu, memory = info["cpu"], info["memory_bytes"]
+            if type(cpu) is not int or cpu < 1 or type(memory) is not int or memory < 1:
+                raise ValueError
+            # Revalidate the authenticated peer's public-safe device identifiers.
+            validated = Resources(
+                cpu=1, memory_gb=1, gpu_ids=[g["id"] for g in info["gpus"]]
+            )
+            if any(
+                not isinstance(g.get("name"), str) or len(g["name"]) > 128
+                for g in info["gpus"]
+            ):
+                raise ValueError
+            if len(validated.gpu_ids) != len(info["gpus"]):
+                raise ValueError
+            return info
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise Failure("host_resources_unavailable") from None
+
+    def resource_capabilities(self):
+        try:
+            info = self.host_resources()
+            return {
+                "resources_editing_enabled": True,
+                "gpu_shared": True,
+                "gpus": info["gpus"],
+                "host_resources": {
+                    "cpu": info["cpu"],
+                    "memory_gb": info["memory_bytes"] / 1_000_000_000,
+                },
+            }
+        except Failure:
+            # An old/offline node never accidentally advertises mutation support.
+            return {
+                "resources_editing_enabled": False,
+                "gpu_shared": True,
+                "gpus": [],
+                "host_resources": None,
+            }
+
+    def check_resource_capacity(self, request):
+        info = self.host_resources()
+        if (
+            request.cpu > info["cpu"]
+            or request.memory_gb * 1_000_000_000 > info["memory_bytes"]
+        ):
+            raise Failure("physical_capacity_exceeded", 422)
+        if set(request.gpu_ids) - {g["id"] for g in info["gpus"]}:
+            raise Failure("gpu_not_allowed", 422)
 
     def public_route_allowed(self, port: Check) -> bool:
         return any(
@@ -265,13 +327,22 @@ class Controller:
                 return self.store.instance(previous), None
             resource = str(uuid4())
             try:
+                self.check_resource_capacity(request)
                 with self.store.transaction() as db:
-                    cpu, memory = db.execute(
-                        "SELECT COALESCE(SUM(cpu),0),COALESCE(SUM(memory_gb),0) FROM instances"
-                    ).fetchone()
+                    cpu, memory = self.store.reserved_resources(db)
                     if (
-                        cpu + request.cpu > self.config.pool_cpu
-                        or memory + float(request.memory_gb)
+                        db.execute(
+                            "SELECT COUNT(*) FROM instances WHERE status='creating'"
+                        ).fetchone()[0]
+                        >= 32
+                    ):
+                        raise Failure("create_queue_full", 409)
+                    if (
+                        self.config.pool_cpu is not None
+                        and cpu + request.cpu > self.config.pool_cpu
+                    ) or (
+                        self.config.pool_memory_gb is not None
+                        and memory + float(request.memory_gb)
                         > self.config.pool_memory_gb
                     ):
                         raise Failure("aggregate_budget_exceeded", 409)
@@ -291,6 +362,10 @@ class Controller:
                         )
                     except sqlite3.IntegrityError:
                         raise Failure("name_in_use", 409) from None
+                    db.execute(
+                        "INSERT INTO resource_settings_v1 VALUES(?,?,0)",
+                        (resource, json.dumps(request.gpu_ids)),
+                    )
                     specs = [self.reserve_row(db, resource, p) for p in request.ports]
                     db.execute(
                         "UPDATE operations SET resource=? WHERE id=?", (resource, key)
@@ -315,6 +390,7 @@ class Controller:
                 work.request.cpu,
                 int(work.request.memory_gb * 1_000_000_000),
                 work.request.root_password.get_secret_value(),
+                *([work.request.gpu_ids] if work.request.gpu_ids else []),
             )
             for spec in work.specs:
                 self.activate(spec)
@@ -337,7 +413,7 @@ class Controller:
             raise
 
     def enqueue_create(self, work: CreateWork):
-        # Admission has already bounded queued jobs by the configured CPU budget.
+        # Admission independently bounds queued password-bearing bootstrap jobs.
         # Not an ASGI BackgroundTask: a middleware/response lifetime must not hold
         # the HTTP request open until apt/SSH bootstrap finishes.
         try:
@@ -434,6 +510,111 @@ class Controller:
             return self.store.instance(resource)
 
         return self.operate(key, "start" if start else "stop", resource, actor, power)
+
+    def update_resources(
+        self, resource: str, request: ResourceChange, actor: str, key=None
+    ):
+        canonical_id(resource)
+        key = key or str(uuid4())
+
+        def update():
+            instance = self.store.instance(resource)
+            if instance["status"] not in {"running", "stopped"}:
+                raise Failure("instance_requires_reconciliation", 409)
+            if instance["resource_version"] != request.expected_version:
+                raise Failure("resources_conflict", 409)
+            self.check_resource_capacity(request)
+            if (
+                instance["status"] == "running"
+                and (
+                    request.memory_gb < Decimal(str(instance["memory_gb"]))
+                    or request.gpu_ids != instance["gpu_ids"]
+                )
+                and not request.allow_restart
+            ):
+                raise Failure("restart_required", 409)
+            with self.store.transaction() as db:
+                current = db.execute(
+                    "SELECT version FROM resource_settings_v1 WHERE instance_id=?",
+                    (resource,),
+                ).fetchone()
+                if (
+                    current[0] if current else 0
+                ) != request.expected_version or db.execute(
+                    "SELECT 1 FROM resource_changes_v1 WHERE instance_id=?", (resource,)
+                ).fetchone():
+                    raise Failure("resources_conflict", 409)
+                cpu, memory = self.store.reserved_resources(db)
+                if (
+                    self.config.pool_cpu is not None
+                    and request.cpu > instance["cpu"]
+                    and cpu + (request.cpu - instance["cpu"]) > self.config.pool_cpu
+                ) or (
+                    self.config.pool_memory_gb is not None
+                    and request.memory_gb > Decimal(str(instance["memory_gb"]))
+                    and memory + (float(request.memory_gb) - instance["memory_gb"])
+                    > self.config.pool_memory_gb
+                ):
+                    raise Failure("aggregate_budget_exceeded", 409)
+                db.execute(
+                    "INSERT INTO resource_changes_v1 VALUES(?,?,?,?,'pending')",
+                    (
+                        resource,
+                        request.cpu,
+                        float(request.memory_gb),
+                        json.dumps(request.gpu_ids),
+                    ),
+                )
+            try:
+                state = self.node.update_resources(
+                    resource,
+                    request.cpu,
+                    int(request.memory_gb * 1_000_000_000),
+                    request.gpu_ids,
+                    request.allow_restart,
+                    key,
+                    instance["cpu"],
+                    int(Decimal(str(instance["memory_gb"])) * 1_000_000_000),
+                    instance["gpu_ids"],
+                )
+                if state not in {"running", "stopped"}:
+                    raise Failure("invalid_agent_state")
+                with self.store.transaction() as db:
+                    current = db.execute(
+                        "SELECT version FROM resource_settings_v1 WHERE instance_id=?",
+                        (resource,),
+                    ).fetchone()
+                    if (current[0] if current else 0) != request.expected_version:
+                        raise Failure("resources_conflict", 409)
+                    db.execute(
+                        "UPDATE instances SET cpu=?,memory_gb=?,status=?,error=NULL,updated_at=? WHERE id=?",
+                        (request.cpu, float(request.memory_gb), state, now(), resource),
+                    )
+                    db.execute(
+                        "INSERT INTO resource_settings_v1 VALUES(?,?,?) ON CONFLICT(instance_id) DO UPDATE SET gpu_ids=excluded.gpu_ids,version=excluded.version",
+                        (
+                            resource,
+                            json.dumps(request.gpu_ids),
+                            request.expected_version + 1,
+                        ),
+                    )
+                    db.execute(
+                        "DELETE FROM resource_changes_v1 WHERE instance_id=?",
+                        (resource,),
+                    )
+                return self.store.instance(resource)
+            except Exception:
+                with self.store.transaction() as db:
+                    db.execute(
+                        "UPDATE resource_changes_v1 SET state='error' WHERE instance_id=?",
+                        (resource,),
+                    )
+                self.store.status(
+                    resource, "error", "resource_change_requires_reconciliation"
+                )
+                raise
+
+        return self.operate(key, "resources", resource, actor, update)
 
     def password(self, resource: str, password: str, actor: str, key=None):
         canonical_id(resource)

@@ -7,7 +7,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .auth import Auth
 from .errors import Failure
-from .models import Check, Create, Password, Port
+from .models import Check, Create, Password, Port, ResourceChange
 
 
 def app_for(controller, auth=None) -> FastAPI:
@@ -74,8 +74,9 @@ def app_for(controller, auth=None) -> FastAPI:
         return {
             "administrator": True,
             "node": "gamma",
-            "max_cpu": 4,
-            "max_memory_gb": 16,
+            "max_cpu": None,
+            "max_memory_gb": None,
+            **controller.resource_capabilities(),
             "domain_suffix": controller.config.domain_suffix,
             "image": "Ubuntu 24.04 LTS",
             "disk_quota": False,
@@ -136,6 +137,17 @@ def app_for(controller, auth=None) -> FastAPI:
         idempotency_key: str | None = Header(default=None),
     ):
         return controller.power(resource, False, request.state.actor, idempotency_key)
+
+    @app.post(prefix + "/{resource}/resources")
+    def resources(
+        resource: str,
+        body: ResourceChange,
+        request: Request,
+        idempotency_key: str | None = Header(default=None),
+    ):
+        return controller.update_resources(
+            resource, body, request.state.actor, idempotency_key
+        )
 
     @app.post(prefix + "/{resource}/password")
     def password(

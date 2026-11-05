@@ -232,9 +232,9 @@ def test_no_positive_cache(controller):
     "field,value",
     [
         ("cpu", True),
-        ("cpu", 5),
+        ("cpu", 0),
         ("memory_gb", True),
-        ("memory_gb", 16.001),
+        ("memory_gb", "0.0001"),
         ("name", "x" * 33),
         ("domain", "evil.ru"),
         ("root_password", "secret\ninjected"),
