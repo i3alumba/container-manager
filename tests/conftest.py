@@ -35,7 +35,33 @@ class FakeAgent:
         self.check("port_status")
         return "active" if "activate" in [c[0] for c in self.calls] else "ready"
 
-    def create(self, resource, cpu, memory, password):
+    def resources(self):
+        self.check("resources")
+        return {
+            "cpu": 64,
+            "memory_bytes": 128_000_000_000,
+            "gpus": [{"id": "0000:01:00.0", "name": "Test shared GPU"}],
+        }
+
+    def update_resources(
+        self,
+        resource,
+        cpu,
+        memory,
+        gpu_ids,
+        allow_restart,
+        operation_id,
+        expected_cpu,
+        expected_memory,
+        expected_gpu_ids,
+    ):
+        self.calls.append(
+            ("update_resources", resource, cpu, memory, gpu_ids, allow_restart)
+        )
+        self.check("update_resources")
+        return self.states.get(resource, "running")
+
+    def create(self, resource, cpu, memory, password, gpu_ids=()):
         self.states[resource] = "running"
         self.calls.append(("create", resource))
         self.check("create")

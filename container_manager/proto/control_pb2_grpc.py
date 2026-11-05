@@ -34,6 +34,16 @@ class NodeStub(object):
         Args:
             channel: A grpc.Channel.
         """
+        self.Resources = channel.unary_unary(
+                '/pp.ubuntu.v1.Node/Resources',
+                request_serializer=container__manager_dot_proto_dot_control__pb2.Empty.SerializeToString,
+                response_deserializer=container__manager_dot_proto_dot_control__pb2.HostResources.FromString,
+                _registered_method=True)
+        self.UpdateResources = channel.unary_unary(
+                '/pp.ubuntu.v1.Node/UpdateResources',
+                request_serializer=container__manager_dot_proto_dot_control__pb2.ResourceRequest.SerializeToString,
+                response_deserializer=container__manager_dot_proto_dot_control__pb2.State.FromString,
+                _registered_method=True)
         self.InstanceStatus = channel.unary_unary(
                 '/pp.ubuntu.v1.Node/InstanceStatus',
                 request_serializer=container__manager_dot_proto_dot_control__pb2.InstanceId.SerializeToString,
@@ -78,6 +88,18 @@ class NodeStub(object):
 
 class NodeServicer(object):
     """Missing associated documentation comment in .proto file."""
+
+    def Resources(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateResources(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
 
     def InstanceStatus(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -130,6 +152,16 @@ class NodeServicer(object):
 
 def add_NodeServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'Resources': grpc.unary_unary_rpc_method_handler(
+                    servicer.Resources,
+                    request_deserializer=container__manager_dot_proto_dot_control__pb2.Empty.FromString,
+                    response_serializer=container__manager_dot_proto_dot_control__pb2.HostResources.SerializeToString,
+            ),
+            'UpdateResources': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateResources,
+                    request_deserializer=container__manager_dot_proto_dot_control__pb2.ResourceRequest.FromString,
+                    response_serializer=container__manager_dot_proto_dot_control__pb2.State.SerializeToString,
+            ),
             'InstanceStatus': grpc.unary_unary_rpc_method_handler(
                     servicer.InstanceStatus,
                     request_deserializer=container__manager_dot_proto_dot_control__pb2.InstanceId.FromString,
@@ -180,6 +212,60 @@ def add_NodeServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class Node(object):
     """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def Resources(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/pp.ubuntu.v1.Node/Resources',
+            container__manager_dot_proto_dot_control__pb2.Empty.SerializeToString,
+            container__manager_dot_proto_dot_control__pb2.HostResources.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdateResources(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/pp.ubuntu.v1.Node/UpdateResources',
+            container__manager_dot_proto_dot_control__pb2.ResourceRequest.SerializeToString,
+            container__manager_dot_proto_dot_control__pb2.State.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
 
     @staticmethod
     def InstanceStatus(request,

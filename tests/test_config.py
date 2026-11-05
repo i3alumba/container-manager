@@ -8,7 +8,7 @@ from container_manager.config import Config
 
 def test_controller_example_loads():
     config = Config.load("examples/controller.json")
-    assert config.pool_cpu == 4 and config.pool_memory_gb == 16
+    assert config.pool_cpu is None and config.pool_memory_gb is None
     assert config.domain_suffix == "hosting.i3alumba.ru"
     assert config.public_port_ranges == {
         "tcp": [[3000, 50000]],
@@ -38,6 +38,14 @@ def test_agent_cannot_bind_wildcard_public_or_non_wg_address(tmp_path, address):
     "field,value",
     [
         ("pool_cpu", True),
+        ("pool_cpu", 0),
+        ("pool_memory_gb", -1),
+        ("gpu_allowed_pci", None),
+        ("gpu_allowed_pci", "/dev/nvidia0"),
+        ("gpu_allowed_pci", ["/dev/nvidia0"]),
+        ("gpu_allowed_pci", [True]),
+        ("gpu_allowed_pci", ["0000:01:00.0", "0000:01:00.0"]),
+        ("gpu_allowed_pci", ["0000:01:00.0;exec"]),
         ("pool_memory_gb", True),
         ("domain_suffix", ["hosting.i3alumba.ru"]),
         ("reserved_ports", [True]),

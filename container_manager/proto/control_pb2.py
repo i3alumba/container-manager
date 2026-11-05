@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n%container_manager/proto/control.proto\x12\x0cpp.ubuntu.v1\"\x07\n\x05\x45mpty\"\x16\n\x05State\x12\r\n\x05state\x18\x01 \x01(\t\"c\n\x04Port\x12\n\n\x02id\x18\x01 \x01(\t\x12\x10\n\x08protocol\x18\x02 \x01(\t\x12\x13\n\x0bpublic_port\x18\x03 \x01(\r\x12\x13\n\x0btarget_port\x18\x04 \x01(\r\x12\x13\n\x0binstance_id\x18\x05 \x01(\t\"/\n\nInspection\x12\x11\n\tavailable\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\"P\n\x08Instance\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0b\n\x03\x63pu\x18\x02 \x01(\r\x12\x14\n\x0cmemory_bytes\x18\x03 \x01(\x04\x12\x15\n\rroot_password\x18\x04 \x01(\t\"\x18\n\nInstanceId\x12\n\n\x02id\x18\x01 \x01(\t\")\n\x0cPowerRequest\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05start\x18\x02 \x01(\x08\"4\n\x0fPasswordRequest\x12\n\n\x02id\x18\x01 \x01(\t\x12\x15\n\rroot_password\x18\x02 \x01(\t2\xcf\x03\n\x04Node\x12?\n\x0eInstanceStatus\x12\x18.pp.ubuntu.v1.InstanceId\x1a\x13.pp.ubuntu.v1.State\x12\x35\n\nPortStatus\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.State\x12\x37\n\x07Inspect\x12\x12.pp.ubuntu.v1.Port\x1a\x18.pp.ubuntu.v1.Inspection\x12\x35\n\x06\x43reate\x12\x16.pp.ubuntu.v1.Instance\x1a\x13.pp.ubuntu.v1.Empty\x12\x38\n\x05Power\x12\x1a.pp.ubuntu.v1.PowerRequest\x1a\x13.pp.ubuntu.v1.Empty\x12>\n\x08Password\x12\x1d.pp.ubuntu.v1.PasswordRequest\x1a\x13.pp.ubuntu.v1.Empty\x12\x32\n\x07Publish\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Empty\x12\x31\n\x06Remove\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Empty2\x93\x02\n\x05Relay\x12\x35\n\nPortStatus\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.State\x12\x37\n\x07Inspect\x12\x12.pp.ubuntu.v1.Port\x1a\x18.pp.ubuntu.v1.Inspection\x12\x32\n\x07Reserve\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Empty\x12\x33\n\x08\x41\x63tivate\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Empty\x12\x31\n\x06Remove\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Emptyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n%container_manager/proto/control.proto\x12\x0cpp.ubuntu.v1\"\x07\n\x05\x45mpty\"\x16\n\x05State\x12\r\n\x05state\x18\x01 \x01(\t\"c\n\x04Port\x12\n\n\x02id\x18\x01 \x01(\t\x12\x10\n\x08protocol\x18\x02 \x01(\t\x12\x13\n\x0bpublic_port\x18\x03 \x01(\r\x12\x13\n\x0btarget_port\x18\x04 \x01(\r\x12\x13\n\x0binstance_id\x18\x05 \x01(\t\"/\n\nInspection\x12\x11\n\tavailable\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\"a\n\x08Instance\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0b\n\x03\x63pu\x18\x02 \x01(\r\x12\x14\n\x0cmemory_bytes\x18\x03 \x01(\x04\x12\x15\n\rroot_password\x18\x04 \x01(\t\x12\x0f\n\x07gpu_ids\x18\x05 \x03(\t\"\x1f\n\x03GPU\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\"S\n\rHostResources\x12\x0b\n\x03\x63pu\x18\x01 \x01(\r\x12\x14\n\x0cmemory_bytes\x18\x02 \x01(\x04\x12\x1f\n\x04gpus\x18\x03 \x03(\x0b\x32\x11.pp.ubuntu.v1.GPU\"\xcd\x01\n\x0fResourceRequest\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0b\n\x03\x63pu\x18\x02 \x01(\r\x12\x14\n\x0cmemory_bytes\x18\x03 \x01(\x04\x12\x0f\n\x07gpu_ids\x18\x04 \x03(\t\x12\x15\n\rallow_restart\x18\x05 \x01(\x08\x12\x14\n\x0coperation_id\x18\x06 \x01(\t\x12\x14\n\x0c\x65xpected_cpu\x18\x07 \x01(\r\x12\x1d\n\x15\x65xpected_memory_bytes\x18\x08 \x01(\x04\x12\x18\n\x10\x65xpected_gpu_ids\x18\t \x03(\t\"\x18\n\nInstanceId\x12\n\n\x02id\x18\x01 \x01(\t\")\n\x0cPowerRequest\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05start\x18\x02 \x01(\x08\"4\n\x0fPasswordRequest\x12\n\n\x02id\x18\x01 \x01(\t\x12\x15\n\rroot_password\x18\x02 \x01(\t2\xd5\x04\n\x04Node\x12=\n\tResources\x12\x13.pp.ubuntu.v1.Empty\x1a\x1b.pp.ubuntu.v1.HostResources\x12\x45\n\x0fUpdateResources\x12\x1d.pp.ubuntu.v1.ResourceRequest\x1a\x13.pp.ubuntu.v1.State\x12?\n\x0eInstanceStatus\x12\x18.pp.ubuntu.v1.InstanceId\x1a\x13.pp.ubuntu.v1.State\x12\x35\n\nPortStatus\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.State\x12\x37\n\x07Inspect\x12\x12.pp.ubuntu.v1.Port\x1a\x18.pp.ubuntu.v1.Inspection\x12\x35\n\x06\x43reate\x12\x16.pp.ubuntu.v1.Instance\x1a\x13.pp.ubuntu.v1.Empty\x12\x38\n\x05Power\x12\x1a.pp.ubuntu.v1.PowerRequest\x1a\x13.pp.ubuntu.v1.Empty\x12>\n\x08Password\x12\x1d.pp.ubuntu.v1.PasswordRequest\x1a\x13.pp.ubuntu.v1.Empty\x12\x32\n\x07Publish\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Empty\x12\x31\n\x06Remove\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Empty2\x93\x02\n\x05Relay\x12\x35\n\nPortStatus\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.State\x12\x37\n\x07Inspect\x12\x12.pp.ubuntu.v1.Port\x1a\x18.pp.ubuntu.v1.Inspection\x12\x32\n\x07Reserve\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Empty\x12\x33\n\x08\x41\x63tivate\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Empty\x12\x31\n\x06Remove\x12\x12.pp.ubuntu.v1.Port\x1a\x13.pp.ubuntu.v1.Emptyb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -40,15 +40,21 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_INSPECTION']._serialized_start=189
   _globals['_INSPECTION']._serialized_end=236
   _globals['_INSTANCE']._serialized_start=238
-  _globals['_INSTANCE']._serialized_end=318
-  _globals['_INSTANCEID']._serialized_start=320
-  _globals['_INSTANCEID']._serialized_end=344
-  _globals['_POWERREQUEST']._serialized_start=346
-  _globals['_POWERREQUEST']._serialized_end=387
-  _globals['_PASSWORDREQUEST']._serialized_start=389
-  _globals['_PASSWORDREQUEST']._serialized_end=441
-  _globals['_NODE']._serialized_start=444
-  _globals['_NODE']._serialized_end=907
-  _globals['_RELAY']._serialized_start=910
-  _globals['_RELAY']._serialized_end=1185
+  _globals['_INSTANCE']._serialized_end=335
+  _globals['_GPU']._serialized_start=337
+  _globals['_GPU']._serialized_end=368
+  _globals['_HOSTRESOURCES']._serialized_start=370
+  _globals['_HOSTRESOURCES']._serialized_end=453
+  _globals['_RESOURCEREQUEST']._serialized_start=456
+  _globals['_RESOURCEREQUEST']._serialized_end=661
+  _globals['_INSTANCEID']._serialized_start=663
+  _globals['_INSTANCEID']._serialized_end=687
+  _globals['_POWERREQUEST']._serialized_start=689
+  _globals['_POWERREQUEST']._serialized_end=730
+  _globals['_PASSWORDREQUEST']._serialized_start=732
+  _globals['_PASSWORDREQUEST']._serialized_end=784
+  _globals['_NODE']._serialized_start=787
+  _globals['_NODE']._serialized_end=1384
+  _globals['_RELAY']._serialized_start=1387
+  _globals['_RELAY']._serialized_end=1662
 # @@protoc_insertion_point(module_scope)

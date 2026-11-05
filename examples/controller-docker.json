@@ -10,7 +10,5 @@
   "relay_address": "10.200.73.1:9444",
   "relay_identity": "alpha-relay",
   "domain_suffix": "hosting.i3alumba.ru",
-  "public_port_ranges": { "tcp": [[3000, 50000]], "udp": [[3000, 50000]] },
-  "pool_cpu": 4,
-  "pool_memory_gb": 16
+  "public_port_ranges": { "tcp": [[3000, 50000]], "udp": [[3000, 50000]] }
 }

@@ -111,6 +111,22 @@ def test_real_grpc_mtls_cn_allowlist_and_identity(config, certificates):
         assert remote.inspect({"protocol": "tcp", "public_port": 2223})["available"]
         remote.create(str(uuid4()), 1, 1_000_000_000, "TransientSecret42!")
         assert agent.calls[0][0] == "create"
+        resources = remote.resources()
+        assert resources["cpu"] == 64 and resources["gpus"][0]["id"] == "0000:01:00.0"
+        assert (
+            remote.update_resources(
+                str(uuid4()),
+                8,
+                32_000_000_000,
+                ["0000:01:00.0"],
+                True,
+                str(uuid4()),
+                1,
+                1_000_000_000,
+                [],
+            )
+            == "running"
+        )
         intruder = Remote(
             replace(
                 controller,
@@ -125,6 +141,13 @@ def test_real_grpc_mtls_cn_allowlist_and_identity(config, certificates):
                     pb.Port(protocol="tcp", public_port=2223), timeout=2
                 )
             assert denied.value.code() == grpc.StatusCode.PERMISSION_DENIED
+            for method, request in [
+                (intruder.stub.Resources, pb.Empty()),
+                (intruder.stub.UpdateResources, pb.ResourceRequest(id=str(uuid4()))),
+            ]:
+                with pytest.raises(grpc.RpcError) as denied_resource:
+                    method(request, timeout=2)
+                assert denied_resource.value.code() == grpc.StatusCode.PERMISSION_DENIED
         finally:
             intruder.channel.close()
         bad_identity = Remote(replace(controller, node_identity="wrong-server"), "node")

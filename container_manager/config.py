@@ -39,8 +39,11 @@ class Config:
     )
     host_addresses: list[str] = field(default_factory=list)
     inspection_sudo: bool = False
-    pool_cpu: int = 4
-    pool_memory_gb: int = 16
+    # None removes the application-wide quota; native host/project policy remains.
+    pool_cpu: int | None = None
+    pool_memory_gb: int | None = None
+    # GPU access is opt-in per physical PCI address, never a browser host path.
+    gpu_allowed_pci: list[str] = field(default_factory=list)
 
     def domain_allowed(self, domain: str) -> bool:
         suffix = "." + self.domain_suffix
@@ -64,12 +67,24 @@ class Config:
                 r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
                 config.domain_suffix,
             )
-            or type(config.pool_cpu) is not int
-            or type(config.pool_memory_gb) is not int
-            or not 1 <= config.pool_cpu <= 1024
-            or not 1 <= config.pool_memory_gb <= 4096
+            or any(
+                value is not None
+                and (type(value) is not int or not 1 <= value <= 2**63 - 1)
+                for value in (config.pool_cpu, config.pool_memory_gb)
+            )
         ):
             raise ValueError("invalid budget/domains")
+        if (
+            not isinstance(config.gpu_allowed_pci, list)
+            or len(config.gpu_allowed_pci) > 64
+            or any(
+                not isinstance(pci, str)
+                or not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", pci)
+                for pci in config.gpu_allowed_pci
+            )
+            or len(set(config.gpu_allowed_pci)) != len(config.gpu_allowed_pci)
+        ):
+            raise ValueError("invalid GPU allowlist")
         if config.mode != "controller":
             ip = ipaddress.ip_address(config.wireguard_ip)
             if (

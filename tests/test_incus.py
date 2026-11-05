@@ -71,8 +71,13 @@ def test_incus_fixed_security_persistent_home_and_secret_stdin(config, spec, pro
 
     def runner(argv, **kwargs):
         calls.append((argv, kwargs))
+        value = (
+            {"cpu": {"total": 64}, "memory": {"total": 128_000_000_000}}
+            if argv[-1] == "/1.0/resources"
+            else PROFILE
+        )
         return SimpleNamespace(
-            returncode=0, stderr=b"", stdout=json.dumps(PROFILE).encode()
+            returncode=0, stderr=b"", stdout=json.dumps(value).encode()
         )
 
     config = replace(config, image_fingerprint="a" * 64, gamma_ip="10.200.73.2")
@@ -143,7 +148,11 @@ def test_incus_partial_guest_is_never_recreated_or_deleted(config, spec):
         return SimpleNamespace(
             returncode=1 if "exec" in argv else 0,
             stderr=b"private error never returned",
-            stdout=json.dumps(PROFILE).encode(),
+            stdout=json.dumps(
+                {"cpu": {"total": 64}, "memory": {"total": 128_000_000_000}}
+                if argv[-1] == "/1.0/resources"
+                else PROFILE
+            ).encode(),
         )
 
     node = Incus(

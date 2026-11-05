@@ -168,6 +168,9 @@ def test_reserved_ports(controller, body, port):
 
 
 def test_pool_budget_counts_stopped_and_error(controller, body):
+    from dataclasses import replace
+
+    controller.config = replace(controller.config, pool_cpu=4, pool_memory_gb=16)
     body["cpu"], body["memory_gb"] = 4, 16
     instance = controller.create(Create(**body), "admin")
     controller.power(instance["id"], False, "admin")
