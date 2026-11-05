@@ -29,9 +29,12 @@ def copy_tcp(client: socket.socket, upstream: socket.socket, idle: float = TCP_I
     readable = {client, upstream}
     write_closed = set()
     deadline = time.monotonic() + idle
-    for stream in peers:
-        stream.setblocking(False)
     try:
+        for stream in peers:
+            if stream.family in (socket.AF_INET, socket.AF_INET6):
+                # Keep small protocol messages out of Nagle/delayed-ACK stalls.
+                stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            stream.setblocking(False)
         with selectors.DefaultSelector() as selector:
             while time.monotonic() < deadline:
                 for stream in peers:
