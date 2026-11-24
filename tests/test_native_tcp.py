@@ -445,7 +445,7 @@ def test_native_tcp_bind_collision_retains_error_never_steals(native_node, spec)
     with socket.socket() as foreign:
         foreign.bind((node.config.gamma_ip, spec["public_port"]))
         foreign.listen()
-        with pytest.raises(Failure, match="native_tcp_bind_failed"):
+        with pytest.raises(Failure, match="native_tcp_address_in_use"):
             node.publish(spec)
         assert foreign.fileno() >= 0
         assert not node.native.bindings

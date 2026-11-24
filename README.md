@@ -706,3 +706,31 @@ RPC response. Allocation pins are released only after querying and confirming bo
 guest and home volume absent. Failed/partial-create guests require operator
 reconciliation before deletion. No production Incus deletion was exercised by the
 mocked tests; deployment and real destructive acceptance require separate approval.
+
+### Incident-scoped mc startup reconciliation
+
+`--repair-mc-native-once ROOT_0600_PIN_JSON` is a root-only node startup option,
+not an RPC or browser API. It repairs only the two fixed mc57 TCP mapping IDs
+in `container_manager/mc_startup_repair.py`. The protected JSON must contain the
+complete expected address-binding record from the operator's consistent backup;
+current pin, ownership, mapping specs and error states must agree exactly. Guest
+ownership must be ready, no native resource intent may exist, and authoritative
+validation must prove the managed guest is running. No guest lifecycle command,
+volume deletion or reservation release is performed.
+
+Use only during explicitly approved shared-agent maintenance with controller
+mutations fenced. Existing streams of every guest on the agent are interrupted.
+Healthy mappings follow normal recovery. Only proven `EADDRINUSE` bind failures
+receive finite retries with fresh validation and no residual binding; the shared
+retry budget is 90 seconds, plus existing individual probe timeouts. No socket
+reuse policy is changed. Failed repair retains error state/reservations; healthy
+RPC service remains available. Remove the one-shot flag from the service command
+after the attempt without another restart.
+
+Before restoring controller inventory, verify every affected node/relay mapping
+and actual upstream application traffic, not merely TCP handshakes. Any explicit
+operator inventory reconciliation must preserve failed operation outcomes and
+record a protected, append-only, fsynced intent/completion receipt with exact
+before/after evidence. Historical error operations still block subsequent normal
+automatic outage recovery; this option does not weaken that gate. This procedure
+requires separate review and operational authorization; it is not an installer.
