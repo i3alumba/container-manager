@@ -23,6 +23,7 @@ message InstanceId { string id = 1; }
 message PowerRequest { string id = 1; bool start = 2; }
 message PasswordRequest { string id = 1; string root_password = 2; }
 service Node {
+  rpc Delete(InstanceId) returns (Empty);
   rpc Resources(Empty) returns (HostResources);
   rpc UpdateResources(ResourceRequest) returns (State);
   rpc InstanceStatus(InstanceId) returns (State);

@@ -685,3 +685,24 @@ nginx integration/CI/Kubernetes are parent/operator scope, outside this director
   original guest SSH host keys, packages, `/etc`, `/home`, limits and each explicitly
   published protocol/port before reopening admissions. No existing production
   workload restart, PV deletion, firewall flush or version upgrade is implied.
+
+
+### Permanent container deletion
+
+`DELETE /api/containers/{id}` uses the same explicit bearer, live Hosting-admin
+checks and optional UUID `Idempotency-Key` as other mutations. Success is
+`{"deleted": true, "id": "<canonical UUID>"}`. This explicitly authorized exception
+to the no-public-delete policy permanently destroys the guest root disk and its
+managed `/home` volume; there is no restore or automatic backup promise. The UI
+must require typed-name confirmation and an irreversible-data-loss warning.
+
+Deletion serializes with other edits and rejects an in-progress creation. Relay
+mappings are removed before node mappings, then the private mTLS node RPC deletes
+only a registry-owned, isolated managed container in the fixed project/pool and
+its named home volume. Reservations and inventory remain on any uncertain failure;
+operators must reconcile failed mapping cleanup rather than force-free ports.
+A node-side deletion tombstone supports retries after partial deletion or a lost
+RPC response. Allocation pins are released only after querying and confirming both
+guest and home volume absent. Failed/partial-create guests require operator
+reconciliation before deletion. No production Incus deletion was exercised by the
+mocked tests; deployment and real destructive acceptance require separate approval.

@@ -377,6 +377,102 @@ class Incus:
                 # Never delete a partial guest or persistent volumes to roll back.
                 raise
 
+    def delete(self, resource: str):
+        def inventory(path, *, volumes=False):
+            records = self.query(path)
+            if not isinstance(records, list) or any(
+                not isinstance(record, dict)
+                or not isinstance(record.get("name"), str)
+                or not record["name"].strip()
+                or record.get("type")
+                not in (("custom",) if volumes else ("container", "virtual-machine"))
+                or (
+                    volumes
+                    and record.get("content_type") not in ("filesystem", "block", "iso")
+                )
+                for record in records
+            ):
+                raise Failure("invalid_agent_state")
+            return records
+
+        name = owned_name(resource)
+        with self.instance_lock(resource), self.allocation.lock:
+            row = next((r for r in self.store.ownership() if r["id"] == resource), None)
+            if not row:
+                raise Failure("instance_requires_reconciliation", 409)
+            if row["state"] == "deleted":
+                return
+            if row["state"] not in {"ready", "deleting"}:
+                raise Failure("instance_requires_reconciliation", 409)
+            if any(
+                json.loads(r["spec"]).get("instance_id") == resource
+                for r in self.store.ownership()
+            ):
+                raise Failure("mappings_require_cleanup", 409)
+            instances = inventory(f"/1.0/instances?project={PROJECT}&recursion=1")
+            volumes = inventory(
+                f"/1.0/storage-pools/{POOL}/volumes/custom?project={PROJECT}&recursion=1",
+                volumes=True,
+            )
+            guest = next((g for g in instances if g.get("name") == name), None)
+            home = next((v for v in volumes if v.get("name") == name + "-home"), None)
+            if row["state"] == "ready" and (guest is None or home is None):
+                raise Failure("instance_requires_reconciliation", 409)
+            if guest is not None:
+                devices = guest.get("expanded_devices", {})
+                config = guest.get("expanded_config", {})
+                if (
+                    guest.get("type") != "container"
+                    or devices.get("root")
+                    != {"type": "disk", "pool": POOL, "path": "/"}
+                    or devices.get("home")
+                    != {
+                        "type": "disk",
+                        "pool": POOL,
+                        "source": name + "-home",
+                        "path": "/home",
+                    }
+                    or any(
+                        config.get(k) != v
+                        for k, v in {
+                            "security.privileged": "false",
+                            "security.nesting": "false",
+                            "security.idmap.isolated": "true",
+                        }.items()
+                    )
+                ):
+                    raise Failure("managed_instance_mismatch", 409)
+            if home is not None and (
+                home.get("type") != "custom" or home.get("content_type") != "filesystem"
+            ):
+                raise Failure("managed_volume_mismatch", 409)
+            self.store.own(resource, json.loads(row["spec"]), "deleting")
+            if guest is not None:
+                self.command(["delete", name, "--force"])
+            if home is not None:
+                self.command(["storage", "volume", "delete", POOL, name + "-home"])
+            # Successful commands are not sufficient: positively confirm absence.
+            remaining_instances = inventory(
+                f"/1.0/instances?project={PROJECT}&recursion=1"
+            )
+            remaining_volumes = inventory(
+                f"/1.0/storage-pools/{POOL}/volumes/custom?project={PROJECT}&recursion=1",
+                volumes=True,
+            )
+            if any(g["name"] == name for g in remaining_instances) or any(
+                v["name"] == name + "-home" for v in remaining_volumes
+            ):
+                raise Failure("deletion_requires_reconciliation", 409)
+            with self.store.transaction() as db:
+                db.execute(
+                    "DELETE FROM address_bindings_v1 WHERE instance_id=?", (resource,)
+                )
+                db.execute(
+                    "DELETE FROM node_resource_changes_v1 WHERE instance_id=?",
+                    (resource,),
+                )
+            self.store.own(resource, json.loads(row["spec"]), "deleted")
+
     def password(self, resource: str, password: str, creating=False):
         from .models import Password
 
