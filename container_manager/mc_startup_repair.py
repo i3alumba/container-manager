@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from .errors import Failure
+from .models import canonical_id
 
 RESOURCE = "bf8316f7-04dd-43be-8e0b-ea46a4d7c478"
 SPECS = (
@@ -61,10 +62,26 @@ def check_scope(node, expected_pin):
     if not guest or guest["state"] != "ready":
         raise Failure("repair_scope_mismatch")
     with node.store.transaction() as db:
-        if db.execute(
-            "SELECT 1 FROM node_resource_changes_v1 WHERE instance_id=?", (RESOURCE,)
-        ).fetchone():
-            raise Failure("repair_scope_mismatch")
+        history = db.execute(
+            "SELECT * FROM node_resource_changes_v1 WHERE instance_id=?", (RESOURCE,)
+        ).fetchone()
+        if history:
+            try:
+                desired = json.loads(history["desired"])
+                # commit_resource_spec retains successful history after committing
+                # the identical owned spec; it is no longer an unresolved intent.
+                completed = (
+                    history["state"] == "done"
+                    and history["instance_id"] == RESOURCE
+                    and canonical_id(history["operation_id"]) == history["operation_id"]
+                    and isinstance(desired, dict)
+                    and desired.get("id") == RESOURCE
+                    and desired == json.loads(guest["spec"])
+                )
+            except (Failure, ValueError, TypeError, KeyError):
+                completed = False
+            if not completed:
+                raise Failure("repair_scope_mismatch")
     for spec in SPECS:
         owned, record = ownership.get(spec["id"]), records.get(spec["id"])
         try:
