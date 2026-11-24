@@ -69,6 +69,9 @@ class Controller:
         with self.lock:
             for instance in self.store.instances():
                 resource = instance["id"]
+                if instance["status"] == "error":
+                    self._recover_node_outage(resource)
+                    continue
                 if instance["status"] in {"running", "stopped"}:
                     try:
                         actual = self.node.instance_status(resource)
@@ -99,6 +102,73 @@ class Controller:
                                 "UPDATE ports SET status='error' WHERE id=?",
                                 (port["id"],),
                             )
+
+    def _recovery_snapshot(self, db, resource):
+        row = db.execute("SELECT * FROM instances WHERE id=?", (resource,)).fetchone()
+        if (
+            not row
+            or row["status"] != "error"
+            or row["error"] != "node_requires_reconciliation"
+        ):
+            return None
+        if (
+            db.execute(
+                "SELECT 1 FROM operations WHERE resource=? AND state IN ('pending','error')",
+                (resource,),
+            ).fetchone()
+            or db.execute(
+                "SELECT 1 FROM resource_changes_v1 WHERE instance_id=?", (resource,)
+            ).fetchone()
+        ):
+            return None
+        ports = [
+            dict(p)
+            for p in db.execute(
+                "SELECT * FROM ports WHERE instance_id=? ORDER BY id", (resource,)
+            )
+        ]
+        if any(p["status"] not in {"active", "error"} for p in ports):
+            return None
+        settings = [
+            dict(r)
+            for r in db.execute(
+                "SELECT * FROM resource_settings_v1 WHERE instance_id=?", (resource,)
+            )
+        ]
+        return dict(row), ports, settings
+
+    def _recover_node_outage(self, resource):
+        # Evidence is read-only; commit nothing until every stored mapping agrees.
+        with self.store.transaction() as db:
+            snapshot = self._recovery_snapshot(db, resource)
+        if snapshot is None:
+            return
+        try:
+            actual = self.node.instance_status(resource)
+            if actual not in {"running", "stopped"}:
+                return
+            for port in snapshot[1]:
+                spec = {
+                    k: port[k] for k in ("id", "protocol", "public_port", "target_port")
+                }
+                spec["instance_id"] = resource
+                if (
+                    self.node.port_status(spec) != "ready"
+                    or self.relay.port_status(spec) != "active"
+                ):
+                    return
+        except Failure:
+            return
+        with self.store.transaction() as db:
+            if self._recovery_snapshot(db, resource) != snapshot:
+                return
+            db.execute(
+                "UPDATE instances SET status=?,error=NULL,updated_at=? WHERE id=?",
+                (actual, now(), resource),
+            )
+            db.execute(
+                "UPDATE ports SET status='active' WHERE instance_id=?", (resource,)
+            )
 
     def host_resources(self):
         try:
@@ -240,7 +310,11 @@ class Controller:
         with self.lock:
             previous = self.store.begin_operation(key, action, resource, actor)
             if previous is not None:
-                return self.store.instance(previous)
+                return (
+                    {"deleted": True, "id": previous}
+                    if action == "delete"
+                    else self.store.instance(previous)
+                )
             try:
                 result = callback()
                 resource = result["id"]
@@ -487,6 +561,41 @@ class Controller:
             return self.store.instance(resource)
 
         return self.operate(key, "remove_port:" + port_id, resource, actor, remove)
+
+    def delete(self, resource: str, actor: str, key=None):
+        canonical_id(resource)
+
+        def delete():
+            instance = self.store.instance(resource)
+            if instance["status"] == "creating":
+                raise Failure("instance_creating", 409)
+            self.store.status(resource, "error", "deletion_requires_reconciliation")
+            try:
+                for port in instance["ports"]:
+                    spec = {
+                        k: port[k]
+                        for k in ("id", "protocol", "public_port", "target_port")
+                    }
+                    spec["instance_id"] = resource
+                    self.relay.remove(spec)
+                    self.node.remove(spec)
+                self.node.delete(resource)
+                with self.store.transaction() as db:
+                    for table in (
+                        "ports",
+                        "resource_settings_v1",
+                        "resource_changes_v1",
+                    ):
+                        db.execute(
+                            f"DELETE FROM {table} WHERE instance_id=?", (resource,)
+                        )
+                    db.execute("DELETE FROM instances WHERE id=?", (resource,))
+            except Exception:
+                # Keep ALL reservations, including already removed mappings.
+                raise
+            return {"deleted": True, "id": resource}
+
+        return self.operate(key, "delete", resource, actor, delete)
 
     def power(self, resource: str, start: bool, actor: str, key=None):
         canonical_id(resource)

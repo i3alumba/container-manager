@@ -122,6 +122,14 @@ def app_for(controller, auth=None) -> FastAPI:
             ),
         )
 
+    @app.delete(prefix + "/{resource}")
+    def delete(
+        resource: str,
+        request: Request,
+        idempotency_key: str | None = Header(default=None),
+    ):
+        return controller.delete(resource, request.state.actor, idempotency_key)
+
     @app.post(prefix + "/{resource}/start")
     def start(
         resource: str,
