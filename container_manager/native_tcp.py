@@ -1,5 +1,6 @@
 """Gamma-only exclusive TCP listeners; state belongs to the node SQLite store."""
 
+import errno
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -39,12 +40,17 @@ class NativeTCP:
             )
             binding.thread.start()
             return binding
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError) as error:
             sock.close()
             binding = self.bindings.pop(spec["id"], None)
             if binding:
                 binding.stop.set()
-            raise Failure("native_tcp_bind_failed", 409) from None
+            code = (
+                "native_tcp_address_in_use"
+                if isinstance(error, OSError) and error.errno == errno.EADDRINUSE
+                else "native_tcp_bind_failed"
+            )
+            raise Failure(code, 409) from None
 
     def ready(self, spec: dict, active: bool) -> bool:
         binding = self.bindings.get(spec["id"])

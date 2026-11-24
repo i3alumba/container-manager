@@ -1,4 +1,6 @@
 import json
+import logging
+import re
 import subprocess
 import threading
 
@@ -78,7 +80,7 @@ class Incus:
             raise Failure("proxy_requires_reconciliation", 409)
         return record
 
-    def recover(self):
+    def recover(self, deadline=None):
         records = {r["id"]: r for r in self.store.native_records()}
         for row in self.store.ownership():
             spec = json.loads(row["spec"])
@@ -93,15 +95,18 @@ class Incus:
                 continue
             with self.instance_lock(spec["instance_id"]):
                 try:
-                    pin = self.store.address_binding(spec["instance_id"])
-                    if not pin or pin["state"] != "ready":
-                        raise Failure("address_requires_reconciliation", 409)
-                    _, status = self.allocation.validate(spec["instance_id"], pin)
-                    self.inspector.check("tcp", spec["public_port"])
-                    active = status == "running" and record["state"] == "active"
-                    self.native.bind(spec, active)
-                    self.store.native_state(spec, "active" if active else "paused")
-                except Failure:
+                    from .mc_startup_repair import restore_binding
+
+                    restore_binding(self, spec, record["state"], deadline)
+                except Failure as error:
+                    code = error.code
+                    if not isinstance(code, str) or not re.fullmatch(
+                        "[a-z_]{1,64}", code
+                    ):
+                        code = "recovery_failure"
+                    logging.getLogger("container_manager.node").error(
+                        "native_recovery_failed code=%s", code
+                    )
                     if spec["id"] in self.native.bindings:
                         self.native.pause(spec)
                     self.store.native_state(spec, "error")

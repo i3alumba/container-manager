@@ -2,6 +2,8 @@ import argparse
 import fcntl
 import logging
 import os
+import re
+import time
 from pathlib import Path
 
 import uvicorn
@@ -25,9 +27,12 @@ def main():
         required=True,
         help="operator-owned JSON; mode controller/node/relay",
     )
+    parser.add_argument("--repair-mc-native-once", metavar="ROOT_0600_PIN_JSON")
     args = parser.parse_args()
     os.umask(0o077)
     config = Config.load(args.config)
+    if args.repair_mc_native_once and (config.mode != "node" or os.geteuid() != 0):
+        parser.error("startup repair requires root node mode")
     Path(config.database).parent.mkdir(parents=True, exist_ok=True)
     # A second process must not reinterpret in-flight operations as interrupted.
     with open(config.database + ".lock", "a") as lock:
@@ -56,7 +61,35 @@ def main():
                 else Relay(config, store, inspector)
             )
             try:
-                backend.recover()
+                if args.repair_mc_native_once:
+                    from .errors import Failure
+                    from .mc_startup_repair import check_scope, load_pin, repair
+
+                    pin = None
+                    try:
+                        pin = load_pin(args.repair_mc_native_once)
+                        check_scope(backend, pin)
+                    except (Failure, OSError):
+                        logging.getLogger("container_manager.node").error(
+                            "mc_startup_repair_scope_rejected"
+                        )
+                        pin = None
+                    deadline = time.monotonic() + 90
+                    backend.recover(deadline=deadline)
+                    if pin is not None:
+                        try:
+                            repair(backend, pin, deadline)
+                        except Failure as error:
+                            code = error.code
+                            if not isinstance(code, str) or not re.fullmatch(
+                                "[a-z_]{1,64}", code
+                            ):
+                                code = "recovery_failure"
+                            logging.getLogger("container_manager.node").error(
+                                "mc_startup_repair_failed code=%s", code
+                            )
+                else:
+                    backend.recover()
                 host = server(config, backend, inspector)
                 host.start()
                 try:
