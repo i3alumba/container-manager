@@ -114,6 +114,9 @@ class Service(wire.NodeServicer, wire.RelayServicer):
             ),
         )
 
+    def Delete(self, request, context):
+        return self.invoke(context, lambda: self.empty(self.backend.delete, request.id))
+
     def Power(self, request, context):
         return self.invoke(
             context, lambda: self.empty(self.backend.power, request.id, request.start)
@@ -285,6 +288,9 @@ class Remote:
                 gpu_ids=gpu_ids,
             ),
         )
+
+    def delete(self, resource):
+        self.call("Delete", pb.InstanceId(id=resource))
 
     def power(self, resource, start):
         self.call("Power", pb.PowerRequest(id=resource, start=start))

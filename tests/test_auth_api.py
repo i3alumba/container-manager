@@ -305,11 +305,12 @@ def test_api_contract(controller, body):
         api.post(f"/api/containers/{resource}/start", headers=AUTH).json()["status"]
         == "running"
     )
-    assert api.delete(f"/api/containers/{resource}", headers=AUTH).status_code == 404
-    assert (
-        api.get("/api/containers/", headers=AUTH).json()["instances"][0]["id"]
-        == resource
-    )
+    controller.node.delete = lambda resource: None
+    assert api.delete(f"/api/containers/{resource}", headers=AUTH).json() == {
+        "deleted": True,
+        "id": resource,
+    }
+    assert api.get("/api/containers/", headers=AUTH).json()["instances"] == []
     assert api.post("/api/containers/NOT-A-UUID/start", headers=AUTH).status_code == 422
 
 
