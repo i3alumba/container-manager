@@ -302,3 +302,81 @@ def test_startup_cli_repair_failure_code_sanitized(startup_cli, caplog, code, ex
     assert "mc_startup_repair_failed code=" + expected in caplog.text
     assert "private payload" not in caplog.text
     host.start.assert_called_once()
+
+
+def test_completed_resource_history_is_accepted_and_unchanged(incident):
+    import json
+
+    node, pin = incident
+    desired = {"id": RESOURCE, "cpu": 4, "memory_bytes": 16000000000, "gpu_ids": []}
+    with node.store.transaction() as db:
+        db.execute(
+            "UPDATE ownership SET spec=? WHERE id=?",
+            (json.dumps(desired, sort_keys=True), RESOURCE),
+        )
+        db.execute(
+            "INSERT INTO node_resource_changes_v1 VALUES (?,?,?,?)",
+            (
+                RESOURCE,
+                "db4573e7-ea21-45e4-83b3-87fd11db307d",
+                json.dumps(desired, sort_keys=True),
+                "done",
+            ),
+        )
+        before = tuple(db.execute("SELECT * FROM node_resource_changes_v1").fetchone())
+    repair(node, pin, time.monotonic())
+    with node.store.transaction() as db:
+        assert (
+            tuple(db.execute("SELECT * FROM node_resource_changes_v1").fetchone())
+            == before
+        )
+    assert all(node.native_record(s)["state"] == "active" for s in SPECS)
+
+
+@pytest.mark.parametrize("state", ["pending", "error", "unknown", "", None])
+def test_unresolved_or_malformed_resource_history_rejected(incident, state):
+    import json
+
+    node, pin = incident
+    with node.store.transaction() as db:
+        # Permit NULL only in this malformed-schema regression fixture.
+        db.execute("DROP TABLE node_resource_changes_v1")
+        db.execute(
+            "CREATE TABLE node_resource_changes_v1 (instance_id TEXT,operation_id TEXT,desired TEXT,state TEXT)"
+        )
+        db.execute(
+            "INSERT INTO node_resource_changes_v1 VALUES (?,?,?,?)",
+            (
+                RESOURCE,
+                "db4573e7-ea21-45e4-83b3-87fd11db307d",
+                json.dumps({"id": RESOURCE}),
+                state,
+            ),
+        )
+    with pytest.raises(Failure, match="repair_scope_mismatch"):
+        repair(node, pin, time.monotonic())
+    node.native.bind.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "desired,operation",
+    [
+        ("null", "db4573e7-ea21-45e4-83b3-87fd11db307d"),
+        ("{}", "db4573e7-ea21-45e4-83b3-87fd11db307d"),
+        (
+            '{"id":"bf8316f7-04dd-43be-8e0b-ea46a4d7c478","cpu":999}',
+            "db4573e7-ea21-45e4-83b3-87fd11db307d",
+        ),
+        ('{"id":"bf8316f7-04dd-43be-8e0b-ea46a4d7c478"}', "invalid-operation"),
+    ],
+)
+def test_completed_resource_history_must_match_owned_spec(incident, desired, operation):
+    node, pin = incident
+    with node.store.transaction() as db:
+        db.execute(
+            "INSERT INTO node_resource_changes_v1 VALUES (?,?,?,?)",
+            (RESOURCE, operation, desired, "done"),
+        )
+    with pytest.raises(Failure, match="repair_scope_mismatch"):
+        repair(node, pin, time.monotonic())
+    node.native.bind.assert_not_called()
