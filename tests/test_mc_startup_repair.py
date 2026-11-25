@@ -198,7 +198,9 @@ def test_startup_failure_log_is_sanitized(incident, caplog):
     node.store.native_state(healthy, "active")
     node.allocation.validate.side_effect = Failure("untrusted\nprivate payload")
     node.recover()
-    assert "code=recovery_failure" in caplog.text
+    assert '"code": "internal_error"' in caplog.text
+    assert '"stage": "recover"' in caplog.text
+    assert healthy["id"] in caplog.text
     assert "private payload" not in caplog.text
     assert node.native_record(healthy)["state"] == "error"
 

@@ -380,3 +380,44 @@ def test_fixed_reservations_are_only_the_operator_infrastructure_set():
         10258,
         10259,
     }
+
+
+def test_power_precondition_diagnostic(controller, body, caplog):
+    import json
+
+    instance, _ = controller.prepare_create(Create(**body), "admin", str(uuid4()))
+    with pytest.raises(Failure, match="instance_creating"):
+        controller.power(instance["id"], True, "admin")
+    record = json.loads(
+        next(
+            r.message
+            for r in caplog.records
+            if r.name == "container_manager.diagnostics"
+        )
+    )
+    assert record["code"] == "instance_creating" and record["stage"] == "precondition"
+    assert record["instance_id"] == instance["id"] and record["duration_ms"] >= 0
+    assert controller.store.instance(instance["id"])["status"] == "creating"
+
+
+def test_reconcile_retains_controlled_failure_reason(controller, body, caplog):
+    import json
+    from unittest.mock import Mock
+
+    instance = controller.create(Create(**body), "admin")
+    controller.node.instance_status = Mock(
+        side_effect=Failure("incus_query_unavailable")
+    )
+    controller.reconcile()
+    records = [
+        json.loads(r.message)
+        for r in caplog.records
+        if r.name == "container_manager.diagnostics"
+    ]
+    record = next(r for r in records if r["code"] == "incus_query_unavailable")
+    assert record["stage"] == "reconcile" and record["instance_id"] == instance["id"]
+    assert record["desired_state"] == "error" and record["duration_ms"] >= 0
+    assert (
+        controller.store.instance(instance["id"])["error"]
+        == "node_requires_reconciliation"
+    )

@@ -1,3 +1,5 @@
+import time
+from .diagnostics import emit
 import logging
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -66,6 +68,7 @@ class Controller:
 
     def reconcile(self):
         """Read-only cross-daemon reconciliation, never release an uncertain port."""
+        started = time.monotonic()
         with self.lock:
             for instance in self.store.instances():
                 resource = instance["id"]
@@ -78,7 +81,16 @@ class Controller:
                         if actual not in {"running", "stopped"}:
                             raise Failure("invalid_agent_state")
                         self.store.status(resource, actual)
-                    except Failure:
+                    except Failure as error:
+                        emit(
+                            "controller",
+                            "reconcile",
+                            error,
+                            started=started,
+                            instance_id=resource,
+                            previous_state=instance["status"],
+                            desired_state="error",
+                        )
                         self.store.status(
                             resource, "error", "node_requires_reconciliation"
                         )
@@ -96,7 +108,16 @@ class Controller:
                             or self.node.port_status(spec) != "ready"
                         ):
                             raise Failure("mapping_requires_reconciliation")
-                    except Failure:
+                    except Failure as error:
+                        emit(
+                            "controller",
+                            "reconcile",
+                            error,
+                            started=started,
+                            spec=spec,
+                            previous_state="active",
+                            desired_state="error",
+                        )
                         with self.store.transaction() as db:
                             db.execute(
                                 "UPDATE ports SET status='error' WHERE id=?",
@@ -601,17 +622,47 @@ class Controller:
         canonical_id(resource)
 
         def power():
+            started = time.monotonic()
             instance = self.store.instance(resource)
             desired = "running" if start else "stopped"
             if instance["status"] == "creating":
+                emit(
+                    "controller",
+                    "precondition",
+                    Failure("instance_creating"),
+                    started=started,
+                    instance_id=resource,
+                    previous_state=instance["status"],
+                    desired_state=desired,
+                    action="start" if start else "stop",
+                    operation_id=key,
+                )
                 raise Failure("instance_creating", 409)
             if instance["status"] == "error":
+                emit(
+                    "controller",
+                    "precondition",
+                    Failure("instance_requires_reconciliation"),
+                    started=started,
+                    instance_id=resource,
+                    previous_state=instance["status"],
+                    desired_state=desired,
+                )
                 raise Failure("instance_requires_reconciliation", 409)
             if instance["status"] != desired:
                 try:
                     self.node.power(resource, start)
                     self.store.status(resource, desired)
-                except Exception:
+                except Exception as error:
+                    emit(
+                        "controller",
+                        "power",
+                        error,
+                        started=started,
+                        instance_id=resource,
+                        previous_state=instance["status"],
+                        desired_state=desired,
+                    )
                     self.store.status(
                         resource, "error", "power_requires_reconciliation"
                     )

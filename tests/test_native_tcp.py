@@ -367,7 +367,9 @@ def test_native_tcp_shutdown_preserves_durable_transport(native_node, spec):
     assert json.loads(before[0]["spec"]) == spec
 
 
-def test_native_tcp_every_connection_revalidates_and_closes_on_drift(native_node, spec):
+def test_native_tcp_every_connection_revalidates_and_closes_on_drift(
+    native_node, spec, caplog
+):
     node = native_node
     with server_for(spec) as server:
         node.publish(spec)
@@ -384,6 +386,15 @@ def test_native_tcp_every_connection_revalidates_and_closes_on_drift(native_node
             # instead of racing its final SQLite transaction.
             with node.instance_lock(spec["instance_id"]):
                 assert node.store.native_records()[0]["state"] == "error"
+            records = [
+                json.loads(r.message)
+                for r in caplog.records
+                if r.name == "container_manager.diagnostics"
+            ]
+            validation = next(r for r in records if r["stage"] == "client_validation")
+            assert validation["mapping_id"] == spec["id"]
+            assert validation["instance_id"] == spec["instance_id"]
+            assert validation["duration_ms"] >= 0 and "generation" in validation
 
 
 def test_native_tcp_generation_fences_connect_completion(
