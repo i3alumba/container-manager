@@ -1,6 +1,7 @@
+import time
+from .diagnostics import emit, emit_transition, route_kind
+
 import json
-import logging
-import re
 import subprocess
 import threading
 
@@ -54,6 +55,7 @@ class Incus:
                 store.own(row["id"], json.loads(row["spec"]), "error")
 
     def query(self, uri, timeout: float = 5):
+        started = time.monotonic()
         try:
             result = self.runner(
                 ["incus", "query", uri],
@@ -64,7 +66,30 @@ class Incus:
             )
             value = json.loads(result.stdout)
             return value.get("metadata", value) if isinstance(value, dict) else value
-        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError) as error:
+            category = (
+                "timeout"
+                if isinstance(error, subprocess.TimeoutExpired)
+                else (
+                    "exit"
+                    if isinstance(error, subprocess.CalledProcessError)
+                    else "oserror" if isinstance(error, OSError) else "json"
+                )
+            )
+            emit(
+                "incus",
+                "query",
+                Failure("incus_query_unavailable"),
+                started=started,
+                category=category,
+                route_kind=route_kind(uri),
+                errno=error.errno if isinstance(error, OSError) else None,
+                returncode=(
+                    error.returncode
+                    if isinstance(error, subprocess.CalledProcessError)
+                    else None
+                ),
+            )
             raise Failure("incus_query_unavailable") from None
 
     def native_record(self, spec):
@@ -81,6 +106,7 @@ class Incus:
         return record
 
     def recover(self, deadline=None):
+        started = time.monotonic()
         records = {r["id"]: r for r in self.store.native_records()}
         for row in self.store.ownership():
             spec = json.loads(row["spec"])
@@ -88,6 +114,14 @@ class Incus:
                 continue
             record = records.get(row["id"])
             if not record or record["state"] not in {"active", "paused"}:
+                emit(
+                    "incus",
+                    "recover",
+                    Failure("proxy_requires_reconciliation"),
+                    started=started,
+                    spec=spec,
+                    desired_state="error",
+                )
                 if record:
                     self.store.native_state(spec, "error")
                 else:
@@ -99,19 +133,21 @@ class Incus:
 
                     restore_binding(self, spec, record["state"], deadline)
                 except Failure as error:
-                    code = error.code
-                    if not isinstance(code, str) or not re.fullmatch(
-                        "[a-z_]{1,64}", code
-                    ):
-                        code = "recovery_failure"
-                    logging.getLogger("container_manager.node").error(
-                        "native_recovery_failed code=%s", code
+                    emit(
+                        "incus",
+                        "recover",
+                        error,
+                        started=started,
+                        spec=spec,
+                        previous_state=record["state"],
+                        desired_state="error",
                     )
                     if spec["id"] in self.native.bindings:
                         self.native.pause(spec)
                     self.store.native_state(spec, "error")
 
     def pause_native_validation(self, binding, generation: int, state: str):
+        started = time.monotonic()
         # Match both identity and generation under the same instance lock as
         # stop/start. Never acquire that lock while holding clients_lock.
         spec = binding.spec
@@ -121,9 +157,28 @@ class Incus:
                     self.native.bindings.get(spec["id"]) is not binding
                     or binding.generation != generation
                 ):
+                    emit_transition(
+                        "incus",
+                        "pause",
+                        started=started,
+                        spec=spec,
+                        generation=generation,
+                        current_generation=binding.generation,
+                        outcome="stale",
+                        desired_state=state,
+                    )
                     return
             self.native.pause(spec)
             self.store.native_state(spec, state)
+            emit_transition(
+                "incus",
+                "pause",
+                started=started,
+                spec=spec,
+                generation=generation,
+                outcome="applied",
+                desired_state=state,
+            )
 
     def close(self):
         self.native.close()
@@ -237,6 +292,7 @@ class Incus:
                 raise Failure("incus_status_unavailable") from None
 
     def port_status(self, spec: dict) -> str:
+        started = time.monotonic()
         with self.instance_lock(spec["instance_id"]):
             canonical_id(spec["id"])
             row = next(
@@ -263,7 +319,10 @@ class Incus:
                     } or not self.native.ready(spec, record["state"] == "active"):
                         raise Failure("native_tcp_not_ready")
                     return "ready"
-                except Failure:
+                except Failure as error:
+                    emit(
+                        "incus", "port_status", error, spec=spec, desired_state="error"
+                    )
                     if spec["id"] in self.native.bindings:
                         self.native.pause(spec)
                     if any(r["id"] == spec["id"] for r in self.store.native_records()):
@@ -497,8 +556,21 @@ class Incus:
             )
 
     def power(self, resource: str, start: bool):
+        started = time.monotonic()
         with self.instance_lock(resource):
-            self.require(resource)
+            try:
+                self.require(resource)
+            except Exception as error:
+                emit(
+                    "incus",
+                    "power",
+                    error,
+                    started=started,
+                    instance_id=resource,
+                    action="start" if start else "stop",
+                    gate="ownership",
+                )
+                raise
             specs = [
                 json.loads(r["spec"])
                 for r in self.store.native_records()
@@ -512,10 +584,30 @@ class Incus:
                     and owned.get("instance_id") == resource
                 ]
                 if {row["id"] for row in owned_tcp} != {spec["id"] for spec in specs}:
+                    emit(
+                        "incus",
+                        "power",
+                        Failure("proxy_requires_reconciliation"),
+                        instance_id=resource,
+                        action="start",
+                        route_kind="claims",
+                    )
                     raise Failure("proxy_requires_reconciliation", 409)
                 for row in owned_tcp:
                     spec = json.loads(row["spec"])
-                    record = self.native_record(spec)
+                    try:
+                        record = self.native_record(spec)
+                    except Exception as error:
+                        emit(
+                            "incus",
+                            "power",
+                            error,
+                            started=started,
+                            spec=spec,
+                            action="start",
+                            gate="record",
+                        )
+                        raise
                     pin = self.store.address_binding(resource)
                     if (
                         row["state"] != "ready"
@@ -525,6 +617,32 @@ class Incus:
                         or pin["version"] != record["address_version"]
                         or not self.native.ready(spec, False)
                     ):
+                        # Follow the original short-circuit gate without any new probes.
+                        gate = (
+                            "ownership"
+                            if row["state"] != "ready"
+                            else (
+                                "record"
+                                if record["state"] != "paused"
+                                else (
+                                    "pin"
+                                    if not pin or pin["state"] != "ready"
+                                    else (
+                                        "version"
+                                        if pin["version"] != record["address_version"]
+                                        else "listener"
+                                    )
+                                )
+                            )
+                        )
+                        emit(
+                            "incus",
+                            "power",
+                            Failure("proxy_requires_reconciliation"),
+                            spec=spec,
+                            action="start",
+                            gate=gate,
+                        )
                         raise Failure("proxy_requires_reconciliation", 409)
             if not start:
                 for spec in specs:

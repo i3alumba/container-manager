@@ -1,5 +1,9 @@
 """Gamma-only exclusive TCP listeners; state belongs to the node SQLite store."""
 
+import time
+
+from .diagnostics import emit
+
 import errno
 import socket
 import threading
@@ -13,6 +17,8 @@ from .relay import Binding, MAX_CONNECTIONS, copy_tcp
 @dataclass
 class NativeBinding(Binding):
     generation: int = 0
+    validation_failure_generation: int = -1
+    upstream_failure_generation: int = -1
 
 
 class NativeTCP:
@@ -26,7 +32,19 @@ class NativeTCP:
         )
 
     def bind(self, spec: dict, active: bool) -> NativeBinding:
-        sock = socket.socket()
+        started = time.monotonic()
+        try:
+            sock = socket.socket()
+        except OSError as error:
+            emit(
+                "native_tcp",
+                "bind",
+                Failure("native_tcp_bind_failed"),
+                started=started,
+                spec=spec,
+                errno=error.errno,
+            )
+            raise
         try:
             sock.bind((self.node.config.gamma_ip, spec["public_port"]))
             sock.listen(32)
@@ -49,6 +67,14 @@ class NativeTCP:
                 "native_tcp_address_in_use"
                 if isinstance(error, OSError) and error.errno == errno.EADDRINUSE
                 else "native_tcp_bind_failed"
+            )
+            emit(
+                "native_tcp",
+                "bind",
+                Failure(code),
+                started=started,
+                spec=spec,
+                errno=error.errno if isinstance(error, OSError) else None,
             )
             raise Failure(code, 409) from None
 
@@ -92,7 +118,9 @@ class NativeTCP:
                 self.capacity.release()
 
     def client(self, binding: NativeBinding, client: socket.socket, generation: int):
+        started = time.monotonic()
         upstream = None
+        connecting = False
         try:
             if not self.validation.acquire(blocking=False):
                 return
@@ -115,9 +143,11 @@ class NativeTCP:
                     or generation != binding.generation
                 ):
                     return
+            connecting = True
             upstream = socket.create_connection(
                 (pin["address"], binding.spec["target_port"]), timeout=3
             )
+            connecting = False
             with binding.clients_lock:
                 if (
                     binding.stop.is_set()
@@ -127,10 +157,38 @@ class NativeTCP:
                     return
                 binding.clients.add(upstream)
             copy_tcp(client, upstream)
-        except Failure:
+        except Failure as error:
+            with binding.clients_lock:
+                report = binding.validation_failure_generation < generation
+                binding.validation_failure_generation = max(
+                    binding.validation_failure_generation, generation
+                )
+            if report:
+                emit(
+                    "native_tcp",
+                    "client_validation",
+                    error,
+                    started=started,
+                    spec=binding.spec,
+                    generation=generation,
+                )
             self.node.pause_native_validation(binding, generation, "error")
-        except OSError:
-            pass
+        except OSError as error:
+            with binding.clients_lock:
+                report = connecting and binding.upstream_failure_generation < generation
+                binding.upstream_failure_generation = max(
+                    binding.upstream_failure_generation, generation
+                )
+            if report:
+                emit(
+                    "native_tcp",
+                    "upstream_connect",
+                    started=started,
+                    spec=binding.spec,
+                    generation=generation,
+                    errno=error.errno,
+                    category="oserror",
+                )
         finally:
             with binding.clients_lock:
                 binding.clients.discard(client)
