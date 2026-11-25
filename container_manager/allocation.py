@@ -1,3 +1,5 @@
+from .diagnostics import emit
+
 """Daemon-authoritative, write-ahead pinning in the shared default network."""
 
 import ipaddress
@@ -38,12 +40,27 @@ class Allocation:
 
         node = self.node
         node.require(resource)
-        profile = node.verify_profile()
+
+        def inspect(stage, function, *args):
+            started = time.monotonic()
+            try:
+                return function(*args)
+            except Exception as error:
+                emit("allocation", stage, error, started=started, instance_id=resource)
+                raise
+
+        profile = inspect("profile", node.verify_profile)
         name = owned_name(resource)
-        instance = node.query(f"/1.0/instances/{name}?project={PROJECT}")
-        network = node.query(f"/1.0/networks/{NETWORK}?project=default")
-        projects, leases = self.lease_domain()
-        claims = node.query("/1.0/instances?all-projects=true&recursion=1")
+        instance = inspect(
+            "instance", node.query, f"/1.0/instances/{name}?project={PROJECT}"
+        )
+        network = inspect(
+            "network", node.query, f"/1.0/networks/{NETWORK}?project=default"
+        )
+        projects, leases = inspect("leases", self.lease_domain)
+        claims = inspect(
+            "claims", node.query, "/1.0/instances?all-projects=true&recursion=1"
+        )
         if (
             instance.get("name") != name
             or instance.get("project") != PROJECT
@@ -275,10 +292,27 @@ class Allocation:
             return False
 
     def validate(self, resource, binding):
+        started = time.monotonic()
         with self.lock:
             try:
                 return self.snapshot(resource, binding)
+            except Failure as error:
+                emit(
+                    "allocation",
+                    "validate",
+                    error,
+                    started=started,
+                    instance_id=resource,
+                )
+                raise
             except (KeyError, TypeError, ValueError, AttributeError):
+                emit(
+                    "allocation",
+                    "validate",
+                    Failure("address_binding_unavailable"),
+                    started=started,
+                    instance_id=resource,
+                )
                 raise Failure("address_binding_unavailable") from None
 
     def pin(self, resource):

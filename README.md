@@ -734,3 +734,22 @@ record a protected, append-only, fsynced intent/completion receipt with exact
 before/after evidence. Historical error operations still block subsequent normal
 automatic outage recovery; this option does not weaken that gate. This procedure
 requires separate review and operational authorization; it is not an installer.
+
+### Native mapping failure diagnostics
+
+New failure records are single JSON messages on `container_manager.diagnostics`.
+Correlate `mapping_id` and `instance_id` (and `generation` when present), not log
+ordering across hosts. `code`, `stage`, `component`, `duration_ms`, query
+`route_kind`, and numeric subprocess `errno`/`returncode` explain the failing
+boundary without printing commands, addresses, credentials, or subprocess output.
+Unknown failure codes become `internal_error`; records do not repair state.
+
+Use `journalctl -u <node-agent-unit> -o cat` on Gamma and
+`journalctl -u <relay-agent-unit> -o cat` on the relay, together with
+`kubectl logs -n <namespace> deployment/<controller-deployment>`; substitute the
+operator's actual unit/deployment names. Search the same mapping/instance UUIDs
+across these streams. Relay logs retain their existing format. Old swallowed
+exceptions cannot be reconstructed from the persisted generic error state.
+Activation requires updated controller processes and a separately approved
+operator restart of the native node agent. This change performs no restart,
+live probe, reconciliation repair, or deployment automatically.
