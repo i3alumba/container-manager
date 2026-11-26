@@ -142,3 +142,23 @@ def spec():
         "public_port": 2223,
         "target_port": 22,
     }
+
+
+@pytest.fixture
+def root_operator_metadata(monkeypatch):
+    """Exercise operator file fences without requiring privileged test execution."""
+    import os
+    from pathlib import Path
+
+    real_fstat, real_stat = os.fstat, Path.stat
+
+    def root_owned(metadata):
+        fields = list(metadata)
+        fields[4] = 0
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "fstat", lambda fd: root_owned(real_fstat(fd)))
+    monkeypatch.setattr(
+        Path, "stat", lambda path, **kw: root_owned(real_stat(path, **kw))
+    )

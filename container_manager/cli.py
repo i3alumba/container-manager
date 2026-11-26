@@ -27,16 +27,40 @@ def main():
         required=True,
         help="operator-owned JSON; mode controller/node/relay",
     )
-    parser.add_argument("--repair-mc-native-once", metavar="ROOT_0600_PIN_JSON")
+    recovery = parser.add_mutually_exclusive_group()
+    recovery.add_argument("--repair-mc-native-once", metavar="ROOT_0600_PIN_JSON")
+    recovery.add_argument("--reconcile-mc-stopped-once", metavar="ROOT_0600_MANIFEST")
     args = parser.parse_args()
+    if args.reconcile_mc_stopped_once:
+        try:
+            run(args, parser)
+        except Exception:
+            logging.getLogger("container_manager.node").error(
+                "mc_stopped_reconciliation_failed"
+            )
+            raise SystemExit(1) from None
+    else:
+        run(args, parser)
+
+
+def run(args, parser):
     os.umask(0o077)
     config = Config.load(args.config)
-    if args.repair_mc_native_once and (config.mode != "node" or os.geteuid() != 0):
+    if (args.repair_mc_native_once or args.reconcile_mc_stopped_once) and (
+        config.mode != "node" or os.geteuid() != 0
+    ):
         parser.error("startup repair requires root node mode")
     Path(config.database).parent.mkdir(parents=True, exist_ok=True)
     # A second process must not reinterpret in-flight operations as interrupted.
     with open(config.database + ".lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        reconciliation = None
+        if args.reconcile_mc_stopped_once:
+            from .mc_stopped_reconciliation import claim
+
+            reconciliation = claim(
+                args.reconcile_mc_stopped_once, args.config, config.database
+            )
         store = Store(config.database)
         logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")
         if config.mode == "controller":
@@ -61,7 +85,24 @@ def main():
                 else Relay(config, store, inspector)
             )
             try:
-                if args.repair_mc_native_once:
+                if reconciliation is not None:
+                    from .mc_stopped_reconciliation import reconcile
+
+                    logging.getLogger("container_manager.node").info(
+                        "mc_stopped_reconciliation_claimed"
+                    )
+                    try:
+                        backend.recover()
+                        reconcile(backend, reconciliation)
+                    except BaseException:
+                        logging.getLogger("container_manager.node").error(
+                            "mc_stopped_reconciliation_failed"
+                        )
+                        raise
+                    logging.getLogger("container_manager.node").info(
+                        "mc_stopped_reconciliation_complete"
+                    )
+                elif args.repair_mc_native_once:
                     from .errors import Failure
                     from .mc_startup_repair import check_scope, load_pin, repair
 
