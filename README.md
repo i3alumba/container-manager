@@ -686,7 +686,6 @@ nginx integration/CI/Kubernetes are parent/operator scope, outside this director
   published protocol/port before reopening admissions. No existing production
   workload restart, PV deletion, firewall flush or version upgrade is implied.
 
-
 ### Permanent container deletion
 
 `DELETE /api/containers/{id}` uses the same explicit bearer, live Hosting-admin
@@ -753,3 +752,166 @@ exceptions cannot be reconstructed from the persisted generic error state.
 Activation requires updated controller processes and a separately approved
 operator restart of the native node agent. This change performs no restart,
 live probe, reconciliation repair, or deployment automatically.
+
+### Stopped MC / 3002 operator-only reconciliation (new source, not activated)
+
+This is a **different contract** from `--repair-mc-native-once`: never reuse that
+running-guest/two-error repair or manufacture a 3004 error. The new
+`--reconcile-mc-stopped-once ROOT_0600_MANIFEST` is mutually exclusive with it,
+root/node-only, and has no RPC entry point. Normal recovery/validation policies
+are unchanged. It never starts MC. Only the exact incident UUID and TCP3002 to
+8000 can move from native/ownership error to paused/ready; its old live binding
+must be absent. Full allocation and resource/device validation must report
+stopped, including again after exclusive inactive bind and exact readiness.
+All four MC ownership mappings (TCP3001→22, TCP3002→8000, TCP3004→3004,
+UDP3003→3003) and exactly three native records are required. Only 3002 may be
+errored; TCP3001/3004 must be paused/ready and UDP3003 ready. Extra/missing rows,
+raw public-port/spec mismatches and unresolved intent graphs are rejected by pure
+snapshot preflight **before claiming or constructing Store/Incus**. A fresh hash
+cannot approve invalid scope. Pin, resource history and **every other database
+row/schema** must remain exact.
+Any bind conflict fails immediately, with no retry. Failed persistence retains
+error/reservations; the newly bound listener is inactive and paused on failure.
+
+Activation requires a separate reviewed maintenance authorization. The parent
+operator owns host actions: fence controller mutations; verify fresh consistent
+full backups and restore artifacts; collect current source/config/process,
+allocation and both-host socket/NAT/firewall provenance; explicitly consent to
+interrupting **all node native streams**. Disable unit `Restart=on-failure` for
+this single attempt and remove the obsolete repair flag/path. Do not start any
+stopped workload as a diagnostic. Unit sandboxing may prohibit `/root`, home and
+`/etc` writes: put manifests and permanent consumed receipts in the writable
+root-owned node state directory (for example `/var/lib/pp-ubuntu-node/`), not
+`/etc`. Keep manifests exactly root:root 0600, and state directory root-owned,
+mode 0700 (no group/world access). No secrets or actual runtime paths belong in Git.
+
+Portable offline preparation, without constructing `Store` or `Incus`:
+
+```python
+import json
+import time
+from container_manager.mc_stopped_reconciliation import (
+    read_snapshot, prepare, config_fingerprint, source_fingerprint,
+)
+
+# A selected, consistent read-only SQLite backup; do not export raw tables/logs.
+selected = read_snapshot("<protected-selected-node-backup>")
+manifest = prepare(
+    selected,
+    config_fingerprint("<exact-operator-config>"),
+    source_fingerprint(),  # Installed reviewed Python source tree, including proto.
+    time.time() + 300,     # Unix seconds; remaining lifetime must be <=900 seconds.
+)
+# Transfer only JSON manifest via protected operator channels, chmod/chown 0600/root.
+encoded = json.dumps(manifest, sort_keys=True)
+```
+
+`read_snapshot` uses SQLite `mode=ro`, a read transaction and explicitly closes
+the connection on success or failure. Snapshot tables include ordered `columns`
+metadata from the SELECT cursor alongside schema and canonical rows. This is a
+new private format; prepare fresh manifests, never reuse old snapshot artifacts. For remote offline
+use, `snapshot(connection)` accepts an existing consistent read-only SQLite
+connection and yields the same pure JSON-compatible object. `prepare` and
+`validate_manifest` are pure APIs; no host access, schema initialization, or
+production Store reads are needed. Hash includes every user table/column value
+and SQLite schema (indexes/triggers included); row order is canonical. Snapshot
+objects may contain sensitive history: retain them only as protected evidence,
+never log them. Manifests contain hashes, not config contents or row payloads.
+
+Exact manifest keys (no extra fields):
+
+```json
+{
+  "purpose": "mc-stopped-3002-v1",
+  "resource": "bf8316f7-04dd-43be-8e0b-ea46a4d7c478",
+  "database_sha256": "<logical-snapshot-sha256>",
+  "config_sha256": "<raw-config-file-sha256>",
+  "source_sha256": "<reviewed-python-tree-sha256>",
+  "expires": 0,
+  "nonce": "<fresh-canonical-uuid4>"
+}
+```
+
+`expires: 0` is deliberately invalid. Use `prepare`, not this illustrative
+JSON. Source fingerprint covers sorted relative names and SHA256 of all `.py`
+files under `container_manager`, excluding caches/dependencies by construction.
+Prepare against the **installed final source**, not an earlier development tree.
+CLI verifies all fences and the complete approved inventory before Store/Incus
+construction, then atomically creates
+`.mc-consumed-<nonce>` **beside the configured database** with O_EXCL/0600 and
+fsyncs receipt plus directory before any recovery mutation. Receipt records the
+manifest digest, not an operation outcome. Preserve receipts permanently even
+if a process crashes, fsync fails, bind conflicts, or rows return to old values.
+Moving a manifest does not reset consumption. No automatic retry/replay: a new
+manifest/nonce requires fresh provenance, backups, review and operator consent.
+Normal startup restores healthy listeners; any unrelated database change causes
+this helper to abort. Success logs only claimed/complete stages. Failure stops
+startup rather than serving an unreviewed repair. The new flag boundary catches claim,
+constructor, recovery, bind, persistence and cleanup exceptions and exits nonzero
+with a fixed failure marker, without raw exception text or traceback. Legacy CLI
+behavior is unchanged. Inspect protected state before further action.
+
+Controller reconciliation is a **separate source-only function**, not a network
+API or automatic follow-up. After proving node/relay paused readiness, fence the
+controller externally and create a new full controller snapshot manifest using
+`prepare(..., purpose="mc-controller-stopped-v1")`. Invoke
+`mc_controller_reconciliation.reconcile_inventory(store, manifest_path,
+config_path, controller_fenced=True, backup_verified=True,
+paused_node_verified=True, receipt_directory="<root-private-receipts>")` only under that reviewed boundary. These booleans
+assert external operator obligations; they do not detect fencing or backups.
+The explicit receipt directory is mandatory for controller purpose, must be
+root-owned 0700 and must not be a symlink. It is independent of the actual
+controller database parent, which may remain application-owned UID/GID 10001 and
+mode 0770: **never chmod/chown that application directory for this utility**.
+For example, authorized operators may select a root-private receipts subdirectory
+under the writable node state directory. Receipt creation and directory fsync
+still precede mutation, and receipts must remain permanently retained.
+It consumes its own nonce, demands exact full database CAS and exact four-port
+controller inventory (three active, only 3002 errored), MC
+`error/power_requires_reconciliation`, exact errored 3002 and no pending
+operations/resource changes, then changes **only** MC status to stopped/error
+NULL and port status to active. Timestamps/reachability and every operations row
+remain byte-for-byte unchanged; unexpected trigger writes roll back. The old
+failed operation is never marked successful. This inventory correction is not
+evidence of end-to-end transport or application health. Remove recovery flags
+before restoring normal restart policy, then use one fresh observed start under
+separate parent control; verify payload, relay/WAN and unrelated mappings before
+claiming runtime acceptance. No activation/deployment is performed by tests.
+
+Metadata-only controller preparation and call (protected consistent backups and
+external fencing remain mandatory):
+
+```python
+from container_manager.mc_controller_reconciliation import reconcile_inventory
+from container_manager.mc_stopped_reconciliation import prepare, read_snapshot
+
+# Hash the exact copied controller ConfigMap JSON bytes, not the node config.
+controller_manifest = prepare(
+    read_snapshot("<protected-selected-controller-backup>"),
+    config_fingerprint("<root-private-exact-controller-config-copy>"),
+    source_fingerprint(),
+    time.time() + 300,
+    purpose="mc-controller-stopped-v1",
+)
+# Write/transfer JSON root:root 0600 using protected operator channels.
+# externally_fenced_store is the reviewed controller Store, with no Controller
+# constructor/recovery invoked. The DB remains at its original application path.
+reconcile_inventory(
+    externally_fenced_store,
+    "<root-private-controller-manifest>",
+    "<root-private-exact-controller-config-copy>",
+    controller_fenced=True,
+    backup_verified=True,
+    paused_node_verified=True,
+    receipt_directory="<root-owned-0700-operator-receipts>",
+)
+```
+
+Exact claim signature is
+`claim(path, config_path, database, *, purpose=PURPOSE, receipt_directory=None)`.
+Node CLI uses the unchanged default: permanent receipts beside its root-private
+database. Controller purpose requires an explicit directory; do not switch it
+between attempts or remove consumed receipts. The manifest key set and digest
+format above are unchanged; purpose, nonce and full logical database hash bind
+both workflows. The controller example uses a separate nonce and controller
+snapshot/config, but the same reviewed installed source fingerprint.
