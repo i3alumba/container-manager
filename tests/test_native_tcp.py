@@ -555,3 +555,48 @@ def test_native_tcp_stale_negative_validation_cannot_pause_resumed_generation(
                 assert current.recv(99) == b"reverse direction intact"
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("entry", ["client", "status"])
+def test_native_tcp_transient_query_timeout_latches_error(
+    native_node, spec, monkeypatch, entry
+):
+    node = native_node
+    node.publish(spec)
+    validate = node.allocation.validate
+    paused = threading.Event()
+    pause = node.pause_native_validation
+
+    def fail_once(*args):
+        monkeypatch.setattr(node.allocation, "validate", validate)
+        raise Failure("incus_query_unavailable")
+
+    def observe_pause(*args):
+        pause(*args)
+        paused.set()
+
+    monkeypatch.setattr(node.allocation, "validate", fail_once)
+    monkeypatch.setattr(node, "pause_native_validation", observe_pause)
+    if entry == "client":
+        with connect(node, spec):
+            assert paused.wait(3)
+    else:
+        assert node.port_status(spec) == "error"
+    assert validate(
+        spec["instance_id"], node.store.address_binding(spec["instance_id"])
+    )
+    assert node.port_status(spec) == "error"
+    assert node.store.native_records()[0]["state"] == "error"
+    assert (
+        next(r for r in node.store.ownership() if r["id"] == spec["id"])["state"]
+        == "error"
+    )
+
+
+def test_native_tcp_target_refusal_does_not_poison(native_node, spec):
+    node = native_node
+    node.publish(spec)
+    with connect(node, spec) as client:
+        assert client.recv(1) == b""
+    assert node.store.native_records()[0]["state"] == "active"
+    assert node.port_status(spec) == "ready"
